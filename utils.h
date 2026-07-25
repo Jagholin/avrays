@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define UTILFUNC [[maybe_unused]] static inline
+
 typedef struct CleanupStack {
   struct CleanupStack *pnext;
   void *what;
@@ -10,13 +12,13 @@ typedef struct CleanupStack {
 } CleanupStack;
 static CleanupStack *cs = NULL;
 
-void cleanup_mem_fn(void *d) { free(d); }
-void cleanup_push_mem(void *memloc) {
+static inline void cleanup_mem_fn(void *d) { free(d); }
+UTILFUNC void cleanup_push_mem(void *memloc) {
   CleanupStack *newcs = malloc(sizeof(CleanupStack));
   *newcs = (CleanupStack){.what = memloc, .cb = &cleanup_mem_fn, .pnext = cs};
   cs = newcs;
 }
-void run_cleanups() {
+UTILFUNC void run_cleanups() {
   while (cs) {
     CleanupStack *t = cs;
     cs->cb(cs->what);
@@ -31,16 +33,16 @@ typedef struct String {
   size_t space;
 } String;
 
-String make_string() {
+UTILFUNC String make_string() {
   char *temp = malloc(256);
   temp[0] = '\0';
 
   return (String){.str = temp, .len = 0, .space = 256};
 }
 
-void free_string(String s) { free(s.str); }
+UTILFUNC void free_string(String s) { free(s.str); }
 
-void concat_string_chars(String *s, char *src) {
+UTILFUNC void concat_string_chars(String *s, char *src) {
   size_t new_len = s->len + strlen(src);
   if (new_len >= s->space) {
     size_t new_space = s->space * 2;
