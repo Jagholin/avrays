@@ -10,38 +10,8 @@
 #include <stdio.h>
 #include <unistd.h>
 
-typedef struct CleanupStack {
-  struct CleanupStack *pnext;
-  void *what;
-  void (*cb)(void *);
-} CleanupStack;
-static CleanupStack *cs = NULL;
+#include "utils.h"
 
-void CleanupMemFn(void *d) { free(d); }
-void CleanupPushMem(void *memloc) {
-  CleanupStack *newcs = malloc(sizeof(CleanupStack));
-  *newcs = (CleanupStack){.what = memloc, .cb = &CleanupMemFn, .pnext = cs};
-  cs = newcs;
-}
-void RunCleanups() {
-  while (cs) {
-    CleanupStack *t = cs;
-    cs->cb(cs->what);
-    cs = cs->pnext;
-    free(t);
-  }
-}
-
-#define ERRCHECK(msg)                                                          \
-  if (result < 0) {                                                            \
-    printf("ERR: %s\n", msg);                                                  \
-    return 1;                                                                  \
-  }
-#define ERRCHECK2(val, msg)                                                    \
-  if (!(val)) {                                                                \
-    printf("ERR: %s\n", msg);                                                  \
-    return 1;                                                                  \
-  }
 enum AVPixelFormat get_format_cb(struct AVCodecContext *s,
                                  const enum AVPixelFormat *fmt) {
   for (size_t i = 0;; i++) {
