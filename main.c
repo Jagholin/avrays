@@ -11,6 +11,7 @@ int pipe_fds[2];
 int pipe_video[2];
 bool audio_stopped = false;
 unsigned int audio_channels = 2;
+const bool audio_dbg = false;
 
 #define BUFFER_SIZE (4096 * 4)
 
@@ -33,8 +34,9 @@ void audio_cb(void *frame_data, unsigned int frames) {
   if (audio_stopped) {
     return;
   }
-  // printf("\e[0G\e[0K(%05d) Requesting data from ffmpeg: %d frames.. ",
-  //      calls_count++, frames);
+  if (audio_dbg)
+    printf("\e[0G\e[0K(%05d) Requesting data from ffmpeg: %d frames.. ",
+           calls_count, frames);
   ssize_t bytes =
       read(pipe_fds[0], frame_data, sizeof(float) * audio_channels * frames);
   if (bytes <= 0) {
@@ -43,6 +45,7 @@ void audio_cb(void *frame_data, unsigned int frames) {
     // printf("Finished");
     // fflush(stdout);
   } // else
+  calls_count++;
   // printf("OK");
 }
 
@@ -61,12 +64,12 @@ int main(int argc, char **argv) {
            argv[1]);
 
   FILE *response = popen(cmd_buff, "r");
-  String resp_str = MakeString();
+  String resp_str = make_string();
   char buf[130];
   int bytes_read = 0;
-  while (bytes_read = fread(buf, 1, 128, response)) {
+  while ((bytes_read = fread(buf, 1, 128, response))) {
     buf[bytes_read] = '\0';
-    ConcatStringChars(&resp_str, buf);
+    concat_string_chars(&resp_str, buf);
   }
 
   StreamData *str_data = malloc(sizeof(struct StreamData));
