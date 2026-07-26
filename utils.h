@@ -182,15 +182,17 @@ UTILFUNC void free_ringbuffer(RingBuffer *rb) {
   *rb = (RingBuffer){0};
 }
 
-#define ERRCHECK(msg)                                                          \
+#define ERRCHECK(...)                                                          \
   if (result < 0) {                                                            \
-    printf("ERR: %s\n", msg);                                                  \
-    return 1;                                                                  \
+    printf("Err: ");                                                           \
+    printf(__VA_ARGS__);                                                       \
+    goto cleanup;                                                              \
   }
-#define ERRCHECK2(val, msg)                                                    \
+#define ERRCHECK2(val, ...)                                                    \
   if (!(val)) {                                                                \
-    printf("ERR: %s\n", msg);                                                  \
-    return 1;                                                                  \
+    printf("Err: ");                                                           \
+    printf(__VA_ARGS__);                                                       \
+    goto cleanup;                                                              \
   }
 
 #endif // !UTILS_H

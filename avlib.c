@@ -134,6 +134,8 @@ int initiate_decoding(DecoderContext *ctx, const char *file_name) {
   ctx->audio_tb = ctx->fmt_ctx->streams[ctx->audio_stream]->time_base;
 
   return 0;
+cleanup:
+  return -1;
 }
 
 int continue_decoding(DecoderContext *ctx) {
@@ -182,7 +184,7 @@ int continue_decoding(DecoderContext *ctx) {
         // Not a video packet
         if (ctx->pkt->stream_index == ctx->audio_stream) {
           res = avcodec_send_packet(ctx->ctxa, ctx->pkt);
-          ERRCHECK2(res >= 0, "Cant send packet to audio decoder");
+          ERRCHECK2(res >= 0, "Cant send packet to audio decoder: %d\n", res);
         }
         av_packet_unref(ctx->pkt);
         continue;
@@ -200,7 +202,7 @@ int continue_decoding(DecoderContext *ctx) {
       }
       av_packet_unref(ctx->pkt);
 
-      ERRCHECK2(res >= 0, "Can't submit a packet to the decoder");
+      ERRCHECK2(res >= 0, "Can't submit a packet to the decoder: %d\n", res);
 
       // Retry decoding a frame
       result = avcodec_receive_frame(ctx->ctx, ctx->fr);
