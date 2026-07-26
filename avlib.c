@@ -24,6 +24,8 @@
 
 #define RING_FRAMES 10
 
+// FILE *outfile;
+
 enum AVPixelFormat get_format_cb(struct AVCodecContext *s,
                                  const enum AVPixelFormat *fmt) {
   for (size_t i = 0;; i++) {
@@ -225,6 +227,10 @@ int continue_decoding(DecoderContext *ctx) {
     ctx->sample_rate = ctx->fr->sample_rate;
     ctx->fr_audio_target->sample_rate = ctx->fr->sample_rate;
     result = swr_config_frame(ctx->swr, ctx->fr_audio_target, ctx->fr);
+    // result = swr_alloc_set_opts2(
+    //     &ctx->swr, &(AVChannelLayout)AV_CHANNEL_LAYOUT_STEREO,
+    //     AV_SAMPLE_FMT_FLT, ctx->fr->sample_rate, &ctx->fr->ch_layout,
+    //     ctx->fr->format, ctx->fr->sample_rate, 0, NULL);
     ERRCHECK("Cant configure SWR");
     ctx->audio_configured = true;
   }
@@ -243,11 +249,14 @@ int continue_decoding(DecoderContext *ctx) {
                             av_get_bytes_per_sample(ctx->fr->format);
     // if (!frame_converted)
     //   ctx->audio_time += (float)ctx->fr->nb_samples / ctx->sample_rate;
-    if (!frame_converted)
+    if (!frame_converted) {
       result = swr_convert_frame(ctx->swr, ctx->fr_audio_target, ctx->fr);
+    }
 
     if (ctx->audio_buffer_size == 0) {
-      ctx->audio_buffer_size = ctx->fr_audio_target->linesize[0];
+      // ctx->audio_buffer_size = ctx->fr_audio_target->linesize[0];
+      ctx->audio_buffer_size =
+          ctx->fr_audio_target->nb_samples * sizeof(float) * 2;
       size_t audio_ring_size = ctx->audio_buffer_size * RING_FRAMES;
       // If the ringbuffer size is too small compared to what raylib
       // expects(4096 bytes) make it bigger.
@@ -263,6 +272,10 @@ int continue_decoding(DecoderContext *ctx) {
       write_loc_audio = write_ringbuffer_chunk_nocommit(&ctx->audio_buffer,
                                                         ctx->audio_buffer_size);
     }
+    // assert(ctx->fr_audio_target->linesize[0] == ctx->audio_buffer_size);
+    assert(ctx->fr_audio_target->nb_samples * 8 == ctx->audio_buffer_size);
+    // fwrite(ctx->fr_audio_target->data[0], 1, ctx->audio_buffer_size,
+    // outfile);
     memcpy(write_loc_audio, ctx->fr_audio_target->data[0],
            ctx->audio_buffer_size);
     ctx->audio_time +=
@@ -345,17 +358,39 @@ void ringbuffer_test() {
 }
 
 // int main(int argc, char **argv) {
-//   // try out some simple stuff with ring buffer
 //   if (argc < 2) {
 //     printf("Not enough arguments");
 //     return 1;
 //   }
+//   outfile = fopen("audio_pure", "wb");
+//   char buff[4096];
 //   DecoderContext ctx;
 //   if (initiate_decoding(&ctx, argv[1])) {
 //     return 1;
 //   }
-//   while (pull_image(&ctx) == 0)
-//     ;
+//   while (true) {
+//     int result = 0;
+//     while (result == 0)
+//       result = continue_decoding(&ctx);
+//     if (result == RESULT_EOF || result == RESULT_ERROR)
+//       break;
+//
+//     // pull audio
+//     for (;;) {
+//       int bytes = pull_audio(&ctx, buff, 4096 / 8);
+//       if (bytes != 0) {
+//         // fwrite(buff, 1, bytes, outfile);
+//       } else
+//         break;
+//     }
+//     for (;;) {
+//       uint8_t *res = pull_image(&ctx);
+//       release_image(&ctx);
+//       if (res == NULL)
+//         break;
+//     }
+//   }
+//   fclose(outfile);
 //   return 0;
 // }
 /*
