@@ -26,9 +26,12 @@ typedef struct DecoderContext {
   size_t audio_buffer_size;
   int i;
   bool audio_configured;
+  bool eof_encountered;
   unsigned int audio_samples_per_frame;
   unsigned int sample_rate;
   unsigned int frame_rate;
+  unsigned int video_width;
+  unsigned int video_height;
 
   AVRational video_tb, audio_tb;
   float audio_time;
@@ -38,10 +41,12 @@ typedef struct DecoderContext {
 #define RESULT_ERROR -1
 #define RESULT_OK 0
 #define RESULT_STALL 1
+#define RESULT_EOF 2
 int initiate_decoding(DecoderContext *ctx, const char *file_name);
 int continue_decoding(DecoderContext *ctx);
 uint8_t *pull_image(DecoderContext *ctx);
 int pull_audio(DecoderContext *ctx, void *audio_buffer, unsigned int frames);
 void free_decoder_context(DecoderContext *ctx);
+bool is_decoder_finished(DecoderContext *ctx);
 
 #endif // !AVLIB_H

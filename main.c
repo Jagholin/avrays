@@ -1,8 +1,11 @@
 #include <raylib.h>
 #include <raymath.h>
+#include <stdint.h>
+#include <threads.h>
 #include <unistd.h>
 
-#include "avlib_fork.h"
+// #include "avlib_fork.h"
+#include "avlib.h"
 
 const bool audio_dbg = false;
 DecoderContext dc;
@@ -32,8 +35,7 @@ int main(int argc, char **argv) {
   InitAudioDevice();
   SetAudioStreamBufferSizeDefault(BUFFER_SIZE);
 
-  AudioStream stream =
-      LoadAudioStream(dc.audio_sample_rate, 32, dc.audio_channels);
+  AudioStream stream = LoadAudioStream(dc.sample_rate, 32, 2);
   SetAudioStreamCallback(stream, audio_cb);
   SetAudioStreamVolume(stream, current_volume);
   PlayAudioStream(stream);
@@ -45,9 +47,14 @@ int main(int argc, char **argv) {
   Texture2D frame_tex = LoadTextureFromImage(frame_img);
 
   while (!WindowShouldClose() && !is_decoder_finished(&dc)) {
-    if (dc.audio_stopped) {
-      StopAudioStream(stream);
-    }
+    // if (dc.audio_stopped) {
+    //   StopAudioStream(stream);
+    // }
+    do {
+      result = continue_decoding(&dc);
+      if (result < 0)
+        return 1;
+    } while (result == 0);
     if (IsKeyPressed(KEY_DOWN)) {
       current_volume -= 0.05;
       current_volume = Clamp(current_volume, 0.0, 1.0);
@@ -60,13 +67,15 @@ int main(int argc, char **argv) {
     }
     ClearBackground(BLACK);
 
-    result = pull_image(&dc);
-    if (result != 0) {
-      break;
-    }
+    uint8_t *image_buff = pull_image(&dc);
 
-    if (!dc.eof_encountered)
-      UpdateTexture(frame_tex, dc.image_buffer);
+    // result = pull_image(&dc);
+    // if (result != 0) {
+    //   break;
+    // }
+    //
+    // if (!dc.eof_encountered)
+    //   UpdateTexture(frame_tex, dc.image_buffer);
 
     BeginDrawing();
 

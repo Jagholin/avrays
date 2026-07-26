@@ -105,6 +105,8 @@ int initiate_decoding(DecoderContext *ctx, const char *file_name) {
   const AVPixFmtDescriptor *pix_desc = av_pix_fmt_desc_get(ctx->ctx->pix_fmt);
   printf("Frame is %dx%d (%s)\n", ctx->ctx->width, ctx->ctx->height,
          pix_desc->name);
+  ctx->video_width = ctx->ctx->width;
+  ctx->video_height = ctx->ctx->height;
 
   ctx->image_buffer_size = av_image_get_buffer_size(
       ctx->ctx->pix_fmt, ctx->ctx->width, ctx->ctx->height, 16);
@@ -116,6 +118,7 @@ int initiate_decoding(DecoderContext *ctx, const char *file_name) {
          "%d\n",
          av_get_sample_fmt_name(ctx->ctxa->sample_fmt), ctx->ctxa->sample_rate,
          av_get_bytes_per_sample(ctx->ctxa->sample_fmt));
+  ctx->sample_rate = ctx->ctxa->sample_rate;
 
   printf("Time base is %d/%d\n",
          ctx->fmt_ctx->streams[ctx->video_stream]->time_base.num,
@@ -139,12 +142,12 @@ int continue_decoding(DecoderContext *ctx) {
     write_loc_audio = write_ringbuffer_chunk_nocommit(&ctx->audio_buffer,
                                                       ctx->audio_buffer_size);
     if (write_loc_audio == NULL)
-      return 1;
+      return RESULT_STALL;
   }
   uint8_t *write_loc_image = write_ringbuffer_chunk_nocommit(
       &ctx->image_buffer, ctx->image_buffer_size);
   if (write_loc_image == NULL)
-    return 1;
+    return RESULT_STALL;
   bool frame_converted = false;
   if (ctx->audio_configured) {
     printf("SWR delay: %ld/%d\n", swr_get_delay(ctx->swr, ctx->sample_rate),
@@ -198,11 +201,12 @@ int continue_decoding(DecoderContext *ctx) {
           frame_is_audio = true;
       }
     }
-    if (result == AVERROR_EOF)
-      return 1;
-    else if (result < 0) {
+    if (result == AVERROR_EOF) {
+      ctx->eof_encountered = true;
+      return RESULT_EOF;
+    } else if (result < 0) {
       printf("Err: decoding frame\n");
-      return 1;
+      return RESULT_ERROR;
     }
   }
 
@@ -269,7 +273,7 @@ int continue_decoding(DecoderContext *ctx) {
   }
 
   if (frame_converted)
-    return 0;
+    return RESULT_OK;
   printf("%10s, %10s, Frame duration: %8" PRId64
          " in %d/%d, Bytes received: %8d\n",
          av_ts2str(ctx->fr->pts), av_ts2str(ctx->fr->pkt_dts),
@@ -278,14 +282,16 @@ int continue_decoding(DecoderContext *ctx) {
   // av_frame_unref(ctx->fr); Not really necessary, avcodec_receive_frame does
   // this for you
   ctx->i++;
-  return 0;
+  return RESULT_OK;
 }
 
 uint8_t *pull_image(DecoderContext *ctx) {
+  printf("pull_image called\n");
   return read_ringbuffer_chunk(&ctx->image_buffer, ctx->image_buffer_size);
 }
 
 int pull_audio(DecoderContext *ctx, void *audio_buffer, unsigned int frames) {
+  printf("pull_audio %s called\n", frames);
   if (!ctx->audio_configured) {
     return 0;
   }
@@ -296,6 +302,8 @@ int pull_audio(DecoderContext *ctx, void *audio_buffer, unsigned int frames) {
 void free_decoder_context(DecoderContext *ctx) {
   // TODO
 }
+
+bool is_decoder_finished(DecoderContext *ctx) { return ctx->eof_encountered; }
 
 void ringbuffer_test() {
   RingBuffer trb = make_ringbuffer(16);
@@ -313,20 +321,20 @@ void ringbuffer_test() {
   read_ringbuffer(&trb, (uint8_t *)data2, 12);
 }
 
-int main(int argc, char **argv) {
-  // try out some simple stuff with ring buffer
-  if (argc < 2) {
-    printf("Not enough arguments");
-    return 1;
-  }
-  DecoderContext ctx;
-  if (initiate_decoding(&ctx, argv[1])) {
-    return 1;
-  }
-  while (pull_image(&ctx) == 0)
-    ;
-  return 0;
-}
+// int main(int argc, char **argv) {
+//   // try out some simple stuff with ring buffer
+//   if (argc < 2) {
+//     printf("Not enough arguments");
+//     return 1;
+//   }
+//   DecoderContext ctx;
+//   if (initiate_decoding(&ctx, argv[1])) {
+//     return 1;
+//   }
+//   while (pull_image(&ctx) == 0)
+//     ;
+//   return 0;
+// }
 /*
 int main(int argc, char **argv) {
   int result;
