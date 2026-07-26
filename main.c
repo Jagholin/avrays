@@ -1,35 +1,22 @@
 #include <raylib.h>
 #include <raymath.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <unistd.h>
 
 #include "avlib_fork.h"
-#include "utils.h"
 
 const bool audio_dbg = false;
 DecoderContext dc;
 
-#define BUFFER_SIZE (4096 * 4)
-
-typedef struct ProbeLine {
-  char *line;
-  struct ProbeLine *pnext;
-} ProbeLine;
-
-typedef struct StreamData {
-  char type;
-  unsigned int width;
-  unsigned int height;
-  unsigned int sample_rate;
-  unsigned int channels;
-  struct StreamData *pnext;
-} StreamData;
+#define RAILIB_AUDIO_BUFFER_INTERNAL 4096
+#define BUFFER_SIZE (RAILIB_AUDIO_BUFFER_INTERNAL * 4)
 
 void audio_cb(void *frame_data, unsigned int frames) {
+  // the amount of data pulled by this function will always be no more than 4096
+  // bytes (hardcoded in raylib, see ReadAudioBufferFramesInMixingFormat
+  // internal function in raudio.c)
+  // printf("Requested %lu bytes by audio callback\n", frames * sizeof(float) *
+  // 2);
   pull_audio(&dc, frame_data, frames);
-  // printf("OK");
 }
 
 int main(int argc, char **argv) {
@@ -52,8 +39,6 @@ int main(int argc, char **argv) {
   PlayAudioStream(stream);
 
   SetTargetFPS(60);
-  // char tbuf[100];
-  // double last_updated = GetTime();
 
   Image frame_img = GenImageColor(dc.video_width, dc.video_height, BLUE);
   ImageFormat(&frame_img, PIXELFORMAT_UNCOMPRESSED_R8G8B8);
@@ -74,7 +59,6 @@ int main(int argc, char **argv) {
       SetAudioStreamVolume(stream, current_volume);
     }
     ClearBackground(BLACK);
-    // read everything from video pipe
 
     result = pull_image(&dc);
     if (result != 0) {
