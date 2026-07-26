@@ -1,6 +1,7 @@
 #include <raylib.h>
 #include <raymath.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <threads.h>
 #include <unistd.h>
 
@@ -43,8 +44,12 @@ int main(int argc, char **argv) {
   SetTargetFPS(60);
 
   Image frame_img = GenImageColor(dc.video_width, dc.video_height, BLUE);
-  ImageFormat(&frame_img, PIXELFORMAT_UNCOMPRESSED_R8G8B8);
+  ImageFormat(&frame_img, PIXELFORMAT_UNCOMPRESSED_GRAYSCALE);
   Texture2D frame_tex = LoadTextureFromImage(frame_img);
+
+  // FILE *testfile = fopen("output", "wb");
+
+  // unsigned int i = 0;
 
   while (!WindowShouldClose() && !is_decoder_finished(&dc)) {
     // if (dc.audio_stopped) {
@@ -68,6 +73,12 @@ int main(int argc, char **argv) {
     ClearBackground(BLACK);
 
     uint8_t *image_buff = pull_image(&dc);
+    // if (i == 500) {
+    //   fwrite(image_buff, 1, dc.image_buffer_size, testfile);
+    //   fclose(testfile);
+    //   return 0;
+    // }
+    // i++;
 
     // result = pull_image(&dc);
     // if (result != 0) {
@@ -75,7 +86,8 @@ int main(int argc, char **argv) {
     // }
     //
     // if (!dc.eof_encountered)
-    //   UpdateTexture(frame_tex, dc.image_buffer);
+    if (image_buff)
+      UpdateTexture(frame_tex, image_buff);
 
     release_image(&dc);
     BeginDrawing();
