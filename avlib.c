@@ -14,6 +14,7 @@
 #include <libswresample/swresample.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <unistd.h>
 
@@ -234,7 +235,18 @@ int pull_image(DecoderContext *ctx) {
 
     if (ctx->audio_buffer_size == 0) {
       ctx->audio_buffer_size = ctx->fr_audio_target->linesize[0];
-      ctx->audio_buffer = make_ringbuffer(ctx->audio_buffer_size * RING_FRAMES);
+      size_t audio_ring_size = ctx->audio_buffer_size * RING_FRAMES;
+      // If the ringbuffer size is too small compared to what raylib
+      // expects(4096 bytes) make it bigger.
+      if (audio_ring_size < 4096 * 8) {
+        audio_ring_size = 4096 * 8;
+        // It still has to divide by audio_buffer_size.
+        size_t size_adj =
+            ctx->audio_buffer_size - audio_ring_size % ctx->audio_buffer_size;
+        audio_ring_size += size_adj;
+      }
+      ctx->audio_buffer = make_ringbuffer(audio_ring_size);
+      printf("Audio buffer size is now %zu\n", ctx->audio_buffer.len);
       write_loc_audio = write_ringbuffer_chunk_nocommit(&ctx->audio_buffer,
                                                         ctx->audio_buffer_size);
     }
@@ -242,7 +254,7 @@ int pull_image(DecoderContext *ctx) {
            ctx->audio_buffer_size);
     ctx->audio_time +=
         (float)ctx->fr_audio_target->nb_samples / ctx->sample_rate;
-    // write_ringbuffer_commit(&ctx->audio_buffer, ctx->audio_buffer_size);
+    write_ringbuffer_commit(&ctx->audio_buffer, ctx->audio_buffer_size);
     printf("Audio linesize is %d, audio time is %f\n", ctx->fr->linesize[0],
            ctx->audio_time);
   } else {
@@ -252,7 +264,7 @@ int pull_image(DecoderContext *ctx) {
         ctx->ctx->pix_fmt, ctx->ctx->width, ctx->ctx->height, 1);
     ctx->video_time +=
         (float)ctx->fr->duration * ctx->video_tb.num / ctx->video_tb.den;
-    // write_ringbuffer_commit(&ctx->image_buffer, ctx->image_buffer_size);
+    write_ringbuffer_commit(&ctx->image_buffer, ctx->image_buffer_size);
     printf("video time is %f\n", ctx->video_time);
   }
 
@@ -273,7 +285,24 @@ void free_decoder_context(DecoderContext *ctx) {
   // TODO
 }
 
+void ringbuffer_test() {
+  RingBuffer trb = make_ringbuffer(16);
+  uint8_t *wp = write_ringbuffer_chunk_nocommit(&trb, 4);
+  char data[8];
+  memcpy(wp, "abcd", 4);
+  write_ringbuffer_commit(&trb, 4);
+  wp = write_ringbuffer_chunk_nocommit(&trb, 4);
+  memcpy(wp, "efgh", 4);
+  write_ringbuffer_commit(&trb, 4);
+  read_ringbuffer(&trb, (uint8_t *)data, 8);
+  // write over buffer boundary
+  write_to_ringbuffer(&trb, "ijklmnopqrs", 12);
+  char data2[12];
+  read_ringbuffer(&trb, (uint8_t *)data2, 12);
+}
+
 int main(int argc, char **argv) {
+  // try out some simple stuff with ring buffer
   if (argc < 2) {
     printf("Not enough arguments");
     return 1;

@@ -141,6 +141,31 @@ UTILFUNC uint8_t *read_ringbuffer_chunk(RingBuffer *rb, size_t len) {
   return result;
 }
 
+UTILFUNC size_t read_ringbuffer(RingBuffer *rb, uint8_t *dest, size_t len) {
+  size_t data_available = 0;
+  if (rb->write_head >= rb->read_head) {
+    data_available += rb->write_head - rb->read_head;
+  } else {
+    data_available += rb->len - rb->read_head;
+    data_available += rb->write_head;
+  }
+
+  if (data_available < len) {
+    return 0;
+  }
+  if (rb->read_head + len > rb->len) {
+    size_t first_ch_len = rb->len - rb->read_head;
+    size_t second_ch_len = len - first_ch_len;
+    memcpy(dest, rb->buffer + rb->read_head, first_ch_len);
+    memcpy(dest + first_ch_len, rb->buffer, second_ch_len);
+    rb->read_head = second_ch_len;
+  } else {
+    memcpy(dest, rb->buffer + rb->read_head, len);
+    rb->read_head += len;
+  }
+  return len;
+}
+
 UTILFUNC void free_ringbuffer(RingBuffer *rb) {
   av_free(rb->buffer);
   *rb = (RingBuffer){0};
