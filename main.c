@@ -77,6 +77,7 @@ int main(int argc, char **argv) {
     // if (!dc.eof_encountered)
     //   UpdateTexture(frame_tex, dc.image_buffer);
 
+    release_image(&dc);
     BeginDrawing();
 
     DrawTexture(frame_tex, 0, 0, WHITE);

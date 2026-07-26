@@ -3,6 +3,7 @@
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libswresample/swresample.h>
+#include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -22,6 +23,7 @@ typedef struct DecoderContext {
 
   RingBuffer image_buffer;
   RingBuffer audio_buffer;
+  pthread_mutex_t buffer_mtx;
   size_t image_buffer_size;
   size_t audio_buffer_size;
   int i;
@@ -45,6 +47,7 @@ typedef struct DecoderContext {
 int initiate_decoding(DecoderContext *ctx, const char *file_name);
 int continue_decoding(DecoderContext *ctx);
 uint8_t *pull_image(DecoderContext *ctx);
+void release_image(DecoderContext *ctx);
 int pull_audio(DecoderContext *ctx, void *audio_buffer, unsigned int frames);
 void free_decoder_context(DecoderContext *ctx);
 bool is_decoder_finished(DecoderContext *ctx);

@@ -12,6 +12,7 @@
 #include <libavutil/pixfmt.h>
 #include <libavutil/timestamp.h>
 #include <libswresample/swresample.h>
+#include <pthread.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -38,6 +39,7 @@ enum AVPixelFormat get_format_cb(struct AVCodecContext *s,
 
 int initiate_decoding(DecoderContext *ctx, const char *file_name) {
   *ctx = (DecoderContext){0};
+  pthread_mutex_init(&ctx->buffer_mtx, NULL);
   int result = avformat_open_input(&ctx->fmt_ctx, file_name, NULL, NULL);
   ERRCHECK("Can't open file");
 
@@ -135,19 +137,24 @@ int initiate_decoding(DecoderContext *ctx, const char *file_name) {
 int continue_decoding(DecoderContext *ctx) {
   // First look if we can receive an additional audio frame from data
   // accumulated in SWR
+  pthread_mutex_lock(&ctx->buffer_mtx);
   bool frame_is_audio = false;
   int result = 0;
   uint8_t *write_loc_audio = NULL;
   if (ctx->audio_configured) {
     write_loc_audio = write_ringbuffer_chunk_nocommit(&ctx->audio_buffer,
                                                       ctx->audio_buffer_size);
-    if (write_loc_audio == NULL)
-      return RESULT_STALL;
+    if (write_loc_audio == NULL) {
+      result = RESULT_STALL;
+      goto cleanup;
+    }
   }
   uint8_t *write_loc_image = write_ringbuffer_chunk_nocommit(
       &ctx->image_buffer, ctx->image_buffer_size);
-  if (write_loc_image == NULL)
-    return RESULT_STALL;
+  if (write_loc_image == NULL) {
+    result = RESULT_STALL;
+    goto cleanup;
+  }
   bool frame_converted = false;
   if (ctx->audio_configured) {
     printf("SWR delay: %ld/%d\n", swr_get_delay(ctx->swr, ctx->sample_rate),
@@ -203,10 +210,12 @@ int continue_decoding(DecoderContext *ctx) {
     }
     if (result == AVERROR_EOF) {
       ctx->eof_encountered = true;
-      return RESULT_EOF;
+      result = RESULT_EOF;
+      goto cleanup;
     } else if (result < 0) {
       printf("Err: decoding frame\n");
-      return RESULT_ERROR;
+      result = RESULT_ERROR;
+      goto cleanup;
     }
   }
 
@@ -272,31 +281,45 @@ int continue_decoding(DecoderContext *ctx) {
     printf("video time is %f\n", ctx->video_time);
   }
 
-  if (frame_converted)
-    return RESULT_OK;
-  printf("%10s, %10s, Frame duration: %8" PRId64
-         " in %d/%d, Bytes received: %8d\n",
-         av_ts2str(ctx->fr->pts), av_ts2str(ctx->fr->pkt_dts),
-         ctx->fr->duration, ctx->fr->time_base.num, ctx->fr->time_base.den,
-         number_bytes_received);
-  // av_frame_unref(ctx->fr); Not really necessary, avcodec_receive_frame does
-  // this for you
-  ctx->i++;
-  return RESULT_OK;
+  if (!frame_converted) {
+    printf("%10s, %10s, Frame duration: %8" PRId64
+           " in %d/%d, Bytes received: %8d\n",
+           av_ts2str(ctx->fr->pts), av_ts2str(ctx->fr->pkt_dts),
+           ctx->fr->duration, ctx->fr->time_base.num, ctx->fr->time_base.den,
+           number_bytes_received);
+    // av_frame_unref(ctx->fr); Not really necessary, avcodec_receive_frame does
+    // this for you
+    ctx->i++;
+  }
+  result = RESULT_OK;
+cleanup:
+  // ringbuffer_release_mtx(&ctx->audio_buffer);
+  // ringbuffer_release_mtx(&ctx->image_buffer);
+  pthread_mutex_unlock(&ctx->buffer_mtx);
+  return result;
 }
 
 uint8_t *pull_image(DecoderContext *ctx) {
+  pthread_mutex_lock(&ctx->buffer_mtx);
   printf("pull_image called\n");
   return read_ringbuffer_chunk(&ctx->image_buffer, ctx->image_buffer_size);
 }
 
+void release_image(DecoderContext *ctx) {
+  pthread_mutex_unlock(&ctx->buffer_mtx);
+}
+
 int pull_audio(DecoderContext *ctx, void *audio_buffer, unsigned int frames) {
-  printf("pull_audio %s called\n", frames);
+  printf("pull_audio %d called\n", frames);
+  pthread_mutex_lock(&ctx->buffer_mtx);
   if (!ctx->audio_configured) {
+    pthread_mutex_unlock(&ctx->buffer_mtx);
     return 0;
   }
   size_t bytes_to_read = frames * 2 * sizeof(float);
-  return read_ringbuffer(&ctx->audio_buffer, audio_buffer, bytes_to_read);
+  int result = read_ringbuffer(&ctx->audio_buffer, audio_buffer, bytes_to_read);
+  pthread_mutex_unlock(&ctx->buffer_mtx);
+  return result;
 }
 
 void free_decoder_context(DecoderContext *ctx) {

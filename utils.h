@@ -2,6 +2,8 @@
 #define UTILS_H
 #include <assert.h>
 #include <libavutil/mem.h>
+#include <pthread.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -82,6 +84,10 @@ UTILFUNC size_t write_to_ringbuffer(RingBuffer *rb, uint8_t *what, size_t len) {
     capacity = rb->read_head - rb->write_head;
   }
 
+  if (capacity == 0) {
+    return 0;
+  }
+
   if (capacity < len)
     len = capacity;
   if (len + rb->write_head > rb->len) {
@@ -103,15 +109,18 @@ UTILFUNC size_t write_to_ringbuffer(RingBuffer *rb, uint8_t *what, size_t len) {
 
 UTILFUNC uint8_t *write_ringbuffer_chunk_nocommit(RingBuffer *rb, size_t len) {
   assert(rb->len % len == 0);
-  if (rb->write_head + len > rb->len)
+  if (rb->write_head + len > rb->len) {
     return NULL;
+  }
 
   // dont run past read_head
-  if (rb->read_head > rb->write_head && rb->write_head + len >= rb->read_head)
+  if (rb->read_head > rb->write_head && rb->write_head + len >= rb->read_head) {
     return NULL;
+  }
 
-  if (rb->write_head + len == rb->len && rb->read_head == 0)
+  if (rb->write_head + len == rb->len && rb->read_head == 0) {
     return NULL;
+  }
 
   return rb->buffer + rb->write_head;
 }
@@ -126,12 +135,14 @@ UTILFUNC void write_ringbuffer_commit(RingBuffer *rb, size_t len) {
 UTILFUNC uint8_t *read_ringbuffer_chunk(RingBuffer *rb, size_t len) {
   // this function only works if reading doesn't cross rb's boundary
   assert(rb->len % len == 0);
-  if (rb->read_head + len > rb->len)
+  if (rb->read_head + len > rb->len) {
     return NULL;
+  }
 
   // If we run past write_head, we don't have enough data
-  if (rb->write_head >= rb->read_head && rb->read_head + len > rb->write_head)
+  if (rb->write_head >= rb->read_head && rb->read_head + len > rb->write_head) {
     return NULL;
+  }
 
   uint8_t *result = rb->buffer + rb->read_head;
   rb->read_head += len;
