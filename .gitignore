@@ -3,6 +3,8 @@
 *.mp4
 output.txt
 output
+player
+player2
 a.out
 outerr.txt
 input_file
