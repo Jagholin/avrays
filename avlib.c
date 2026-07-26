@@ -129,7 +129,7 @@ int initiate_decoding(DecoderContext *ctx, const char *file_name) {
   return 0;
 }
 
-int pull_image(DecoderContext *ctx) {
+int continue_decoding(DecoderContext *ctx) {
   // First look if we can receive an additional audio frame from data
   // accumulated in SWR
   bool frame_is_audio = false;
@@ -279,6 +279,18 @@ int pull_image(DecoderContext *ctx) {
   // this for you
   ctx->i++;
   return 0;
+}
+
+uint8_t *pull_image(DecoderContext *ctx) {
+  return read_ringbuffer_chunk(&ctx->image_buffer, ctx->image_buffer_size);
+}
+
+int pull_audio(DecoderContext *ctx, void *audio_buffer, unsigned int frames) {
+  if (!ctx->audio_configured) {
+    return 0;
+  }
+  size_t bytes_to_read = frames * 2 * sizeof(float);
+  return read_ringbuffer(&ctx->audio_buffer, audio_buffer, bytes_to_read);
 }
 
 void free_decoder_context(DecoderContext *ctx) {

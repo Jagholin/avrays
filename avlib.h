@@ -4,6 +4,7 @@
 #include <libavformat/avformat.h>
 #include <libswresample/swresample.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "utils.h"
 
@@ -34,8 +35,13 @@ typedef struct DecoderContext {
   float video_time;
 } DecoderContext;
 
+#define RESULT_ERROR -1
+#define RESULT_OK 0
+#define RESULT_STALL 1
 int initiate_decoding(DecoderContext *ctx, const char *file_name);
-int pull_image(DecoderContext *ctx);
+int continue_decoding(DecoderContext *ctx);
+uint8_t *pull_image(DecoderContext *ctx);
+int pull_audio(DecoderContext *ctx, void *audio_buffer, unsigned int frames);
 void free_decoder_context(DecoderContext *ctx);
 
 #endif // !AVLIB_H
