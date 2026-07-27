@@ -12,6 +12,7 @@
 #include <libavutil/pixfmt.h>
 #include <libavutil/timestamp.h>
 #include <libswresample/swresample.h>
+#include <math.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -41,7 +42,8 @@ enum AVPixelFormat get_format_cb(struct AVCodecContext *s,
 }
 
 int initiate_decoding(DecoderContext *ctx, const char *file_name) {
-  *ctx = (DecoderContext){0};
+  *ctx = (DecoderContext){0, .min_delta_time = INFINITY,
+                          .max_delta_time = -INFINITY};
   pthread_mutex_init(&ctx->buffer_mtx, NULL);
   int result = avformat_open_input(&ctx->fmt_ctx, file_name, NULL, NULL);
   ERRCHECK("Can't open file");
@@ -113,8 +115,10 @@ int initiate_decoding(DecoderContext *ctx, const char *file_name) {
   ctx->video_width = ctx->ctx->width;
   ctx->video_height = ctx->ctx->height;
 
-  ctx->image_buffer_size = av_image_get_buffer_size(
-      ctx->ctx->pix_fmt, ctx->ctx->width, ctx->ctx->height, 16);
+  ctx->image_buffer_size =
+      av_image_get_buffer_size(ctx->ctx->pix_fmt, ctx->ctx->width,
+                               ctx->ctx->height, 16) +
+      sizeof(float);
   // TODO: initialize audio buffer
 
   ctx->image_buffer = make_ringbuffer(ctx->image_buffer_size * RING_FRAMES);
@@ -187,8 +191,8 @@ int continue_decoding(DecoderContext *ctx) {
   }
   bool frame_converted = false;
   if (ctx->audio_configured) {
-    printf("SWR delay: %ld/%d\n", swr_get_delay(ctx->swr, ctx->sample_rate),
-           ctx->audio_samples_per_frame);
+    // printf("SWR delay: %ld/%d\n", swr_get_delay(ctx->swr, ctx->sample_rate),
+    //      ctx->audio_samples_per_frame);
   }
 
   if (ctx->audio_configured && swr_get_delay(ctx->swr, ctx->sample_rate) >
@@ -318,25 +322,34 @@ int continue_decoding(DecoderContext *ctx) {
     ctx->audio_time +=
         (float)ctx->fr_audio_target->nb_samples / ctx->sample_rate;
     write_ringbuffer_commit(&ctx->audio_buffer, ctx->audio_buffer_size);
-    printf("Audio linesize is %d, audio time is %f\n", ctx->fr->linesize[0],
-           ctx->audio_time);
+    // printf("Audio linesize is %d, audio time is %f\n", ctx->fr->linesize[0],
+    //      ctx->audio_time);
   } else {
     number_bytes_received = av_image_copy_to_buffer(
-        write_loc_image, ctx->image_buffer_size,
+        write_loc_image + sizeof(float), ctx->image_buffer_size,
         (const uint8_t *const *)ctx->fr->data, ctx->fr->linesize,
         ctx->ctx->pix_fmt, ctx->ctx->width, ctx->ctx->height, 1);
     ctx->video_time +=
         (float)ctx->fr->duration * ctx->video_tb.num / ctx->video_tb.den;
+    (*(float *)write_loc_image) = ctx->video_time;
     write_ringbuffer_commit(&ctx->image_buffer, ctx->image_buffer_size);
-    printf("video time is %f\n", ctx->video_time);
+    // printf("video time is %f\n", ctx->video_time);
+  }
+
+  ctx->delta_time = ctx->video_time - ctx->audio_time;
+  if (ctx->delta_time > ctx->max_delta_time) {
+    ctx->max_delta_time = ctx->delta_time;
+  }
+  if (ctx->delta_time < ctx->min_delta_time) {
+    ctx->min_delta_time = ctx->delta_time;
   }
 
   if (!frame_converted) {
-    printf("%10s, %10s, Frame duration: %8" PRId64
-           " in %d/%d, Bytes received: %8d\n",
-           av_ts2str(ctx->fr->pts), av_ts2str(ctx->fr->pkt_dts),
-           ctx->fr->duration, ctx->fr->time_base.num, ctx->fr->time_base.den,
-           number_bytes_received);
+    // printf("%10s, %10s, Frame duration: %8" PRId64
+    // " in %d/%d, Bytes received: %8d\n",
+    // av_ts2str(ctx->fr->pts), av_ts2str(ctx->fr->pkt_dts),
+    // ctx->fr->duration, ctx->fr->time_base.num, ctx->fr->time_base.den,
+    // number_bytes_received);
     // av_frame_unref(ctx->fr); Not really necessary, avcodec_receive_frame does
     // this for you
     ctx->i++;
@@ -361,10 +374,15 @@ void try_unlock_decoder_sem(DecoderContext *ctx) {
   }
 }
 
-uint8_t *pull_image(DecoderContext *ctx) {
+uint8_t *pull_image(DecoderContext *ctx, float *timestamp) {
   pthread_mutex_lock(&ctx->buffer_mtx);
-  printf("pull_image called\n");
-  return read_ringbuffer_chunk(&ctx->image_buffer, ctx->image_buffer_size);
+  // printf("pull_image called\n");
+  uint8_t *data =
+      read_ringbuffer_chunk(&ctx->image_buffer, ctx->image_buffer_size);
+  if (data == NULL)
+    return data;
+  *timestamp = *(float *)data;
+  return data + sizeof(float);
 }
 
 void release_image(DecoderContext *ctx) {
@@ -373,7 +391,7 @@ void release_image(DecoderContext *ctx) {
 }
 
 int pull_audio(DecoderContext *ctx, void *audio_buffer, unsigned int frames) {
-  printf("pull_audio %d called\n", frames);
+  // printf("pull_audio %d called\n", frames);
   pthread_mutex_lock(&ctx->buffer_mtx);
   if (!ctx->audio_configured) {
     pthread_mutex_unlock(&ctx->buffer_mtx);

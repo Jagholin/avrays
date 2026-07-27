@@ -40,6 +40,9 @@ typedef struct DecoderContext {
   AVRational video_tb, audio_tb;
   float audio_time;
   float video_time;
+  float delta_time;
+  float max_delta_time;
+  float min_delta_time;
 
   sem_t sem;
   sem_t startup_sem;
@@ -52,7 +55,7 @@ typedef struct DecoderContext {
 #define RESULT_EOF 2
 int initiate_decoding(DecoderContext *ctx, const char *file_name);
 int continue_decoding(DecoderContext *ctx);
-uint8_t *pull_image(DecoderContext *ctx);
+uint8_t *pull_image(DecoderContext *ctx, float *timestamp);
 void release_image(DecoderContext *ctx);
 int pull_audio(DecoderContext *ctx, void *audio_buffer, unsigned int frames);
 void free_decoder_context(DecoderContext *ctx);

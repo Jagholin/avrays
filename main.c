@@ -14,6 +14,8 @@ DecoderContext dc;
 #define RAILIB_AUDIO_BUFFER_INTERNAL 4096
 #define BUFFER_SIZE (RAILIB_AUDIO_BUFFER_INTERNAL * 4)
 
+/*volatile*/ float audio_timest = 0.0;
+
 void audio_cb(void *frame_data, unsigned int frames) {
   // the amount of data pulled by this function will always be no more than 4096
   // bytes (hardcoded in raylib, see ReadAudioBufferFramesInMixingFormat
@@ -21,6 +23,7 @@ void audio_cb(void *frame_data, unsigned int frames) {
   // printf("Requested %lu bytes by audio callback\n", frames * sizeof(float) *
   // 2);
   pull_audio(&dc, frame_data, frames);
+  audio_timest += (float)frames / dc.sample_rate;
 }
 
 void *decode_thread(void *d) {
@@ -68,6 +71,7 @@ int main(int argc, char **argv) {
   PlayAudioStream(stream);
 
   // unsigned int i = 0;
+  float video_timest = 0;
 
   while (!WindowShouldClose() && !is_decoder_finished(&dc)) {
     // if (dc.audio_stopped) {
@@ -85,25 +89,45 @@ int main(int argc, char **argv) {
     }
     ClearBackground(BLACK);
 
-    uint8_t *image_buff = pull_image(&dc);
-    // if (i == 500) {
-    //   fwrite(image_buff, 1, dc.image_buffer_size, testfile);
-    //   fclose(testfile);
-    //   return 0;
-    // }
-    // i++;
+    if (video_timest < audio_timest) {
+      uint8_t *image_buff = NULL;
+      while (video_timest < audio_timest) {
+        image_buff = pull_image(&dc, &video_timest);
+        if (image_buff == NULL)
+          break;
+        // If we are going for the next iteration, have to make sure to
+        // release_image.
+        printf("incoming ts: %f\n", video_timest);
+        if (video_timest < audio_timest) {
+          release_image(&dc);
+        }
+      }
+      // if (i == 500) {
+      //   fwrite(image_buff, 1, dc.image_buffer_size, testfile);
+      //   fclose(testfile);
+      //   return 0;
+      // }
+      // i++;
 
-    // result = pull_image(&dc);
-    // if (result != 0) {
-    //   break;
-    // }
-    //
-    // if (!dc.eof_encountered)
-    if (image_buff)
-      UpdateTexture(frame_tex, image_buff);
+      // result = pull_image(&dc);
+      // if (result != 0) {
+      //   break;
+      // }
+      //
+      // if (!dc.eof_encountered)
+      if (image_buff) {
+        // printf("audio ts: %f, video ts: %f\n", audio_timest, video_timest);
+        // printf("audio queue length: %zu, video queue: %zu\n",
+        //        ringbuffer_len(&dc.audio_buffer),
+        //        ringbuffer_len(&dc.image_buffer));
+        UpdateTexture(frame_tex, image_buff);
+      }
+      release_image(&dc);
+    }
 
-    release_image(&dc);
     BeginDrawing();
+    printf("delta: %f, max delta: %f, min delta: %f\n", dc.delta_time,
+           dc.max_delta_time, dc.min_delta_time);
 
     DrawTexture(frame_tex, 0, 0, WHITE);
     DrawText("Hello World!", 10, 10, 24, PURPLE);
