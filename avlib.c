@@ -22,7 +22,8 @@
 #include "avlib.h"
 #include "utils.h"
 
-#define RING_FRAMES 10
+// 30 frames buffer is about a second for most videos
+#define RING_FRAMES 30
 
 // FILE *outfile;
 
@@ -133,22 +134,45 @@ int initiate_decoding(DecoderContext *ctx, const char *file_name) {
   ctx->video_tb = ctx->fmt_ctx->streams[ctx->video_stream]->time_base;
   ctx->audio_tb = ctx->fmt_ctx->streams[ctx->audio_stream]->time_base;
 
+  result = sem_init(&ctx->sem, 0, 1);
+  ERRCHECK("Cant initialize semaphore?!");
+  result = sem_init(&ctx->startup_sem, 0, 0);
+  ERRCHECK("Cant initialize semaphore?!");
+
   return 0;
 cleanup:
   return -1;
 }
 
+void signal_startup(DecoderContext *ctx) {
+  if (ctx->startup_happened)
+    return;
+  sem_post(&ctx->startup_sem);
+  ctx->startup_happened = true;
+}
+
 int continue_decoding(DecoderContext *ctx) {
-  // First look if we can receive an additional audio frame from data
-  // accumulated in SWR
+  // So that we dont get stuck in the stall spinlock, we
+  // utilize the semaphore to indicate that the decoding can proceed
+  //
+  // Decoding has to happen in a separate thread, otherwise there is a
+  // danger of self deadlock
+  sem_wait(&ctx->sem);
+  sem_post(&ctx->sem);
   pthread_mutex_lock(&ctx->buffer_mtx);
+
   bool frame_is_audio = false;
   int result = 0;
   uint8_t *write_loc_audio = NULL;
+
+  // First look if we can receive an additional audio frame from data
+  // accumulated in SWR
   if (ctx->audio_configured) {
     write_loc_audio = write_ringbuffer_chunk_nocommit(&ctx->audio_buffer,
                                                       ctx->audio_buffer_size);
     if (write_loc_audio == NULL) {
+      signal_startup(ctx);
+      sem_wait(&ctx->sem); // indicate stall condition
       result = RESULT_STALL;
       goto cleanup;
     }
@@ -156,6 +180,8 @@ int continue_decoding(DecoderContext *ctx) {
   uint8_t *write_loc_image = write_ringbuffer_chunk_nocommit(
       &ctx->image_buffer, ctx->image_buffer_size);
   if (write_loc_image == NULL) {
+    signal_startup(ctx);
+    sem_wait(&ctx->sem); // indicate stall condition
     result = RESULT_STALL;
     goto cleanup;
   }
@@ -262,18 +288,24 @@ int continue_decoding(DecoderContext *ctx) {
       // ctx->audio_buffer_size = ctx->fr_audio_target->linesize[0];
       ctx->audio_buffer_size =
           ctx->fr_audio_target->nb_samples * sizeof(float) * 2;
-      size_t audio_ring_size = ctx->audio_buffer_size * RING_FRAMES;
+      // How much is 1 second of sound? sample_rate samples
+      size_t target_audio_ring_size = ctx->sample_rate * sizeof(float) * 2;
+      // This is now also the bitrate for sound
+      size_t size_adj = ctx->audio_buffer_size -
+                        target_audio_ring_size % ctx->audio_buffer_size;
+      target_audio_ring_size += size_adj;
+      size_t audio_ring_size = target_audio_ring_size;
       // If the ringbuffer size is too small compared to what raylib
       // expects(4096 bytes) make it bigger.
       if (audio_ring_size < 4096 * 8) {
         audio_ring_size = 4096 * 8;
         // It still has to divide by audio_buffer_size.
-        size_t size_adj =
+        size_adj =
             ctx->audio_buffer_size - audio_ring_size % ctx->audio_buffer_size;
         audio_ring_size += size_adj;
       }
       ctx->audio_buffer = make_ringbuffer(audio_ring_size);
-      printf("Audio buffer size is now %zu\n", ctx->audio_buffer.len);
+      printf("Audio buffer size is now %zu\n", ctx->audio_buffer.buf_size);
       write_loc_audio = write_ringbuffer_chunk_nocommit(&ctx->audio_buffer,
                                                         ctx->audio_buffer_size);
     }
@@ -317,6 +349,18 @@ cleanup:
   return result;
 }
 
+void try_unlock_decoder_sem(DecoderContext *ctx) {
+  int sem_value;
+  sem_getvalue(&ctx->sem, &sem_value);
+  if (sem_value == 0) {
+    // we can advance semaphore if both buffers are less than 80% empty
+    if (ringbuffer_len(&ctx->image_buffer) < 0.8 * ctx->image_buffer.buf_size &&
+        ringbuffer_len(&ctx->audio_buffer) < 0.8 * ctx->audio_buffer.buf_size) {
+      sem_post(&ctx->sem);
+    }
+  }
+}
+
 uint8_t *pull_image(DecoderContext *ctx) {
   pthread_mutex_lock(&ctx->buffer_mtx);
   printf("pull_image called\n");
@@ -324,6 +368,7 @@ uint8_t *pull_image(DecoderContext *ctx) {
 }
 
 void release_image(DecoderContext *ctx) {
+  try_unlock_decoder_sem(ctx);
   pthread_mutex_unlock(&ctx->buffer_mtx);
 }
 
@@ -336,6 +381,7 @@ int pull_audio(DecoderContext *ctx, void *audio_buffer, unsigned int frames) {
   }
   size_t bytes_to_read = frames * 2 * sizeof(float);
   int result = read_ringbuffer(&ctx->audio_buffer, audio_buffer, bytes_to_read);
+  try_unlock_decoder_sem(ctx);
   pthread_mutex_unlock(&ctx->buffer_mtx);
   return result;
 }
@@ -398,102 +444,3 @@ void ringbuffer_test() {
 //   fclose(outfile);
 //   return 0;
 // }
-/*
-int main(int argc, char **argv) {
-  int result;
-  int video_stream;
-  AVFormatContext *fmt_ctx = NULL;
-
-  result = avformat_open_input(&fmt_ctx, argv[1], NULL, NULL);
-  ERRCHECK("Can't open file");
-
-  result = avformat_find_stream_info(fmt_ctx, NULL);
-  ERRCHECK("Cant find stream info");
-
-  video_stream =
-      av_find_best_stream(fmt_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
-  ERRCHECK2(video_stream >= 0, "Cant find video stream");
-  AVCodecParameters *origin_par = fmt_ctx->streams[video_stream]->codecpar;
-
-  const AVCodec *codec = avcodec_find_decoder(origin_par->codec_id);
-  ERRCHECK2(codec, "Can't find decoder");
-  printf("Video decoded with %s\n", codec->name);
-
-  AVCodecContext *ctx = avcodec_alloc_context3(codec);
-  ERRCHECK2(ctx, "Cant allocate memory for decoder context");
-
-  result = avcodec_parameters_to_context(ctx, origin_par);
-  ERRCHECK("Cant initiate codec parameters");
-  ctx->thread_count = 4;
-  ctx->thread_type = FF_THREAD_SLICE;
-  ctx->get_format = &get_format_cb;
-
-  result = avcodec_open2(ctx, codec, NULL);
-  ERRCHECK("Cant open decoder");
-
-  AVFrame *fr = av_frame_alloc();
-  ERRCHECK2(fr, "Cant allocate frame");
-
-  AVPacket *pkt = av_packet_alloc();
-  ERRCHECK2(pkt, "Cant allocate packet");
-
-  const AVPixFmtDescriptor *pix_desc = av_pix_fmt_desc_get(ctx->pix_fmt);
-  printf("Frame is %dx%d (%s)\n", ctx->width, ctx->height, pix_desc->name);
-
-  size_t byte_buffer_size =
-      av_image_get_buffer_size(ctx->pix_fmt, ctx->width, ctx->height, 16);
-
-  uint8_t *byte_buffer = av_malloc(byte_buffer_size);
-  ERRCHECK2(byte_buffer, "Cant allocate frame byte buffer");
-
-  printf("Time base is %d/%d\n", fmt_ctx->streams[video_stream]->time_base.num,
-         fmt_ctx->streams[video_stream]->time_base.den);
-
-  sleep(5);
-  int i = 0;
-  while (result >= 0) {
-    result = av_read_frame(fmt_ctx, pkt);
-    if (result >= 0 && pkt->stream_index != video_stream) {
-      av_packet_unref(pkt);
-      continue;
-    }
-
-    if (result < 0) {
-      result = avcodec_send_packet(ctx, NULL);
-    } else {
-      if (pkt->pts == AV_NOPTS_VALUE) {
-        pkt->pts = pkt->dts = i;
-      }
-      result = avcodec_send_packet(ctx, pkt);
-    }
-    av_packet_unref(pkt);
-
-    ERRCHECK2(result >= 0, "Can't submit a packet to the decoder");
-
-    while (result >= 0) {
-      result = avcodec_receive_frame(ctx, fr);
-      if (result == AVERROR_EOF)
-        return 0;
-      else if (result == AVERROR(EAGAIN)) {
-        result = 0;
-        break;
-      } else if (result < 0) {
-        printf("Err: decoding frame\n");
-        return 0;
-      }
-
-      int number_bytes_received = av_image_copy_to_buffer(
-          byte_buffer, byte_buffer_size, (const uint8_t *const *)fr->data,
-          fr->linesize, ctx->pix_fmt, ctx->width, ctx->height, 1);
-      ERRCHECK2(number_bytes_received >= 0, "Can't copy image to buffer");
-
-      // TODO lol
-      printf("%10s, %10s, Frame duration: %8" PRId64 ", Bytes received: %8d\n",
-             av_ts2str(fr->pts), av_ts2str(fr->pkt_dts), fr->duration,
-             number_bytes_received);
-      av_frame_unref(fr);
-    }
-    i++;
-  }
-  return 0;
-} */

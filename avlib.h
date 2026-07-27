@@ -4,6 +4,7 @@
 #include <libavformat/avformat.h>
 #include <libswresample/swresample.h>
 #include <pthread.h>
+#include <semaphore.h>
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -32,12 +33,17 @@ typedef struct DecoderContext {
   unsigned int audio_samples_per_frame;
   unsigned int sample_rate;
   unsigned int frame_rate;
+  // unsigned int video_bitrate, audio_bitrate;
   unsigned int video_width;
   unsigned int video_height;
 
   AVRational video_tb, audio_tb;
   float audio_time;
   float video_time;
+
+  sem_t sem;
+  sem_t startup_sem;
+  bool startup_happened;
 } DecoderContext;
 
 #define RESULT_ERROR -1

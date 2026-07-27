@@ -23,23 +23,29 @@ void audio_cb(void *frame_data, unsigned int frames) {
   pull_audio(&dc, frame_data, frames);
 }
 
+void *decode_thread(void *d) {
+  int result = 0;
+  do {
+    result = continue_decoding(&dc);
+    if (result < 0)
+      exit(EXIT_FAILURE);
+  } while (result != RESULT_EOF);
+  return (void *)result;
+}
+
 int main(int argc, char **argv) {
   float current_volume = 0.2;
+  pthread_t decoder;
 
-  int result = initiate_decoding(&dc, argv[1]);
-  if (result != 0) {
-    return result;
-  }
+  char *file_name = argv[1];
+  int result = initiate_decoding(&dc, file_name);
+  if (result != 0)
+    exit(EXIT_FAILURE);
   unsigned int scaled_width = Clamp(dc.video_width, 100, 2000);
   unsigned int scaled_height = Clamp(dc.video_height, 100, 1200);
   InitWindow(scaled_width, scaled_height, "My new window");
   InitAudioDevice();
   SetAudioStreamBufferSizeDefault(BUFFER_SIZE);
-
-  AudioStream stream = LoadAudioStream(dc.sample_rate, 32, 2);
-  SetAudioStreamCallback(stream, audio_cb);
-  SetAudioStreamVolume(stream, current_volume);
-  PlayAudioStream(stream);
 
   SetTargetFPS(60);
 
@@ -48,6 +54,18 @@ int main(int argc, char **argv) {
   Texture2D frame_tex = LoadTextureFromImage(frame_img);
 
   // FILE *testfile = fopen("output", "wb");
+  result = pthread_create(&decoder, NULL, &decode_thread, argv);
+  if (result) {
+    printf("Couldn't create a decoder thread\n");
+    return -1;
+  }
+  // wait until enough frames were decoded
+  sem_wait(&dc.startup_sem);
+
+  AudioStream stream = LoadAudioStream(dc.sample_rate, 32, 2);
+  SetAudioStreamCallback(stream, audio_cb);
+  SetAudioStreamVolume(stream, current_volume);
+  PlayAudioStream(stream);
 
   // unsigned int i = 0;
 
@@ -55,11 +73,6 @@ int main(int argc, char **argv) {
     // if (dc.audio_stopped) {
     //   StopAudioStream(stream);
     // }
-    do {
-      result = continue_decoding(&dc);
-      if (result < 0)
-        return 1;
-    } while (result == 0);
     if (IsKeyPressed(KEY_DOWN)) {
       current_volume -= 0.05;
       current_volume = Clamp(current_volume, 0.0, 1.0);
