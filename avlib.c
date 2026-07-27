@@ -89,7 +89,7 @@ int initiate_decoding(DecoderContext *ctx, const char *file_name) {
   ERRCHECK("Cant initiate audio codec parameters");
   ctx->ctx->thread_count = 4;
   ctx->ctx->thread_type = FF_THREAD_SLICE;
-  ctx->ctx->get_format = &get_format_cb;
+  // ctx->ctx->get_format = &get_format_cb;
 
   result = avcodec_open2(ctx->ctx, codec, NULL);
   ERRCHECK("Cant open decoder");
@@ -185,6 +185,9 @@ int continue_decoding(DecoderContext *ctx) {
         if (ctx->pkt->stream_index == ctx->audio_stream) {
           res = avcodec_send_packet(ctx->ctxa, ctx->pkt);
           ERRCHECK2(res >= 0, "Cant send packet to audio decoder: %d\n", res);
+          result = avcodec_receive_frame(ctx->ctxa, ctx->fr);
+          if (result == 0)
+            frame_is_audio = true;
         }
         av_packet_unref(ctx->pkt);
         continue;
@@ -207,9 +210,9 @@ int continue_decoding(DecoderContext *ctx) {
       // Retry decoding a frame
       result = avcodec_receive_frame(ctx->ctx, ctx->fr);
       if (result != 0) {
-        result = avcodec_receive_frame(ctx->ctxa, ctx->fr);
-        if (result == 0)
-          frame_is_audio = true;
+        // result = avcodec_receive_frame(ctx->ctxa, ctx->fr);
+        // if (result == 0)
+        //   frame_is_audio = true;
       }
     }
     if (result == AVERROR_EOF) {
