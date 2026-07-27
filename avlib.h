@@ -38,8 +38,9 @@ typedef struct DecoderContext {
   unsigned int video_height;
 
   AVRational video_tb, audio_tb;
-  float audio_time;
-  float video_time;
+  AVRational audio_time;
+  AVRational video_time;
+  AVRational video_framerate;
   float delta_time;
   float max_delta_time;
   float min_delta_time;

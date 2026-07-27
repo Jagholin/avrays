@@ -42,8 +42,10 @@ enum AVPixelFormat get_format_cb(struct AVCodecContext *s,
 }
 
 int initiate_decoding(DecoderContext *ctx, const char *file_name) {
-  *ctx = (DecoderContext){0, .min_delta_time = INFINITY,
-                          .max_delta_time = -INFINITY};
+  *ctx = (DecoderContext){.min_delta_time = INFINITY,
+                          .max_delta_time = -INFINITY,
+                          .audio_time = av_make_q(0, 1),
+                          .video_time = av_make_q(0, 1)};
   pthread_mutex_init(&ctx->buffer_mtx, NULL);
   int result = avformat_open_input(&ctx->fmt_ctx, file_name, NULL, NULL);
   ERRCHECK("Can't open file");
@@ -129,7 +131,7 @@ int initiate_decoding(DecoderContext *ctx, const char *file_name) {
          av_get_bytes_per_sample(ctx->ctxa->sample_fmt));
   ctx->sample_rate = ctx->ctxa->sample_rate;
 
-  printf("Time base is %d/%d\n",
+  printf("video Time base is %d/%d\n",
          ctx->fmt_ctx->streams[ctx->video_stream]->time_base.num,
          ctx->fmt_ctx->streams[ctx->video_stream]->time_base.den);
   printf("audio Time base is %d/%d\n",
@@ -142,6 +144,10 @@ int initiate_decoding(DecoderContext *ctx, const char *file_name) {
   ERRCHECK("Cant initialize semaphore?!");
   result = sem_init(&ctx->startup_sem, 0, 0);
   ERRCHECK("Cant initialize semaphore?!");
+
+  printf("Codec framerate: %d/%d\n", ctx->ctx->framerate.num,
+         ctx->ctx->framerate.den);
+  ctx->video_framerate = ctx->ctx->framerate;
 
   return 0;
 cleanup:
@@ -319,8 +325,9 @@ int continue_decoding(DecoderContext *ctx) {
     // outfile);
     memcpy(write_loc_audio, ctx->fr_audio_target->data[0],
            ctx->audio_buffer_size);
-    ctx->audio_time +=
-        (float)ctx->fr_audio_target->nb_samples / ctx->sample_rate;
+    ctx->audio_time =
+        av_add_q(ctx->audio_time,
+                 av_make_q(ctx->fr_audio_target->nb_samples, ctx->sample_rate));
     write_ringbuffer_commit(&ctx->audio_buffer, ctx->audio_buffer_size);
     // printf("Audio linesize is %d, audio time is %f\n", ctx->fr->linesize[0],
     //      ctx->audio_time);
@@ -329,14 +336,15 @@ int continue_decoding(DecoderContext *ctx) {
         write_loc_image + sizeof(float), ctx->image_buffer_size,
         (const uint8_t *const *)ctx->fr->data, ctx->fr->linesize,
         ctx->ctx->pix_fmt, ctx->ctx->width, ctx->ctx->height, 1);
-    ctx->video_time +=
-        (float)ctx->fr->duration * ctx->video_tb.num / ctx->video_tb.den;
-    (*(float *)write_loc_image) = ctx->video_time;
+    ctx->video_time =
+        av_mul_q(av_make_q(ctx->fr->best_effort_timestamp, 1), ctx->video_tb);
+    (*(float *)write_loc_image) =
+        (float)ctx->video_time.num / ctx->video_time.den;
     write_ringbuffer_commit(&ctx->image_buffer, ctx->image_buffer_size);
     // printf("video time is %f\n", ctx->video_time);
   }
 
-  ctx->delta_time = ctx->video_time - ctx->audio_time;
+  ctx->delta_time = av_q2d(av_sub_q(ctx->video_time, ctx->audio_time));
   if (ctx->delta_time > ctx->max_delta_time) {
     ctx->max_delta_time = ctx->delta_time;
   }
