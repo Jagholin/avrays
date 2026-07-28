@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <threads.h>
+#include <time.h>
 #include <unistd.h>
 
 // #include "avlib_fork.h"
@@ -21,13 +22,13 @@ const char *fs_yuv420p = "#version 420 \n"
                          "in vec2 fragTexCoord;"
                          "in vec4 fragColor;"
                          "out vec4 finalColor;"
-                         "uniform sampler2D texture0;"
-                         "layout(binding=1) uniform sampler2D texture1;"
-                         "layout(binding=2) uniform sampler2D texture2;"
+                         "layout(binding=0) uniform sampler2D tex_luma;"
+                         "layout(binding=1) uniform sampler2D tex_u;"
+                         "layout(binding=2) uniform sampler2D tex_v;"
                          "void main() {"
-                         "   float luma = texture(texture0, fragTexCoord).r;"
-                         "   float u = texture(texture1, fragTexCoord).r;"
-                         "   float v = texture(texture2, fragTexCoord).r;"
+                         "   float luma = texture(tex_luma, fragTexCoord).r;"
+                         "   float u = texture(tex_u, fragTexCoord).r;"
+                         "   float v = texture(tex_v, fragTexCoord).r;"
                          "   luma=1.1643*(luma-0.0625);"
                          "   u=u-0.5;"
                          "   v=v-0.5;"
@@ -38,6 +39,7 @@ const char *fs_yuv420p = "#version 420 \n"
                          "}";
 
 /*volatile*/ float audio_timest = 0.0;
+float cb_timing, min_cb_timing = INFINITY, max_cb_timing = -INFINITY;
 
 void audio_cb(void *frame_data, unsigned int frames) {
   // the amount of data pulled by this function will always be no more than 4096
@@ -45,8 +47,20 @@ void audio_cb(void *frame_data, unsigned int frames) {
   // internal function in raudio.c)
   // printf("Requested %lu bytes by audio callback\n", frames * sizeof(float) *
   // 2);
-  pull_audio(&dc, frame_data, frames);
+  struct timespec time_start, time_end;
+  clock_gettime(CLOCK_MONOTONIC, &time_start);
+  int size = pull_audio(&dc, frame_data, frames);
+
+  printf("pull audio returned %d\n", size);
   audio_timest += (float)frames / dc.sample_rate;
+  clock_gettime(CLOCK_MONOTONIC, &time_end);
+  long int td = (time_end.tv_sec - time_start.tv_sec) * 1000000000 +
+                time_end.tv_nsec - time_start.tv_nsec;
+  cb_timing = (float)td / 1000000000;
+  if (min_cb_timing > cb_timing)
+    min_cb_timing = cb_timing;
+  if (max_cb_timing < cb_timing)
+    max_cb_timing = cb_timing;
 }
 
 void *decode_thread(void *d) {
@@ -60,6 +74,11 @@ void *decode_thread(void *d) {
 }
 
 int main(int argc, char **argv) {
+  struct timespec times;
+  clock_getres(CLOCK_MONOTONIC, &times);
+  printf("Resolution of the clock is %ld s, %ld ns\n", times.tv_sec,
+         times.tv_nsec);
+
   float current_volume = 0.2;
   pthread_t decoder;
 
@@ -102,6 +121,7 @@ int main(int argc, char **argv) {
   SetAudioStreamCallback(stream, audio_cb);
   SetAudioStreamVolume(stream, current_volume);
   PlayAudioStream(stream);
+  double start_ts = GetTime();
 
   // unsigned int i = 0;
   float video_timest = 0;
@@ -131,16 +151,19 @@ int main(int argc, char **argv) {
           break;
         // If we are going for the next iteration, have to make sure to
         // release_image.
-        printf("incoming ts: %f\n", video_timest);
+        // printf("incoming ts: %f\n", video_timest);
         if (video_timest < audio_timest) {
           release_image(&dc);
         }
       }
       if (image_buff) {
-        // printf("audio ts: %f, video ts: %f\n", audio_timest, video_timest);
-        // printf("audio queue length: %zu, video queue: %zu\n",
-        //        ringbuffer_len(&dc.audio_buffer),
-        //        ringbuffer_len(&dc.image_buffer));
+        printf("audio ts: %f, video ts: %f\n", audio_timest, video_timest);
+        printf("max cb timing: %f, min cb timing: %f\n", max_cb_timing,
+               min_cb_timing);
+        printf("Time since start: %g\n", GetTime() - start_ts);
+        // printf("audio queue length: %f, video queue: %zu\n",
+        //        ringbuffer_len(&dc.audio_buffer) / (float)(48000 * 8),
+        //        ringbuffer_len(&dc.image_buffer) / dc.image_buffer_size);
         UpdateTexture(frame_tex, image_buff);
         image_buff += dc.video_height * dc.video_width;
         UpdateTexture(u_tex, image_buff);
@@ -151,8 +174,8 @@ int main(int argc, char **argv) {
     }
 
     BeginDrawing();
-    printf("delta: %f, max delta: %f, min delta: %f\n", dc.delta_time,
-           dc.max_delta_time, dc.min_delta_time);
+    // printf("delta: %f, max delta: %f, min delta: %f\n", dc.delta_time,
+    //        dc.max_delta_time, dc.min_delta_time);
 
     BeginShaderMode(video_shader);
     {
@@ -160,14 +183,14 @@ int main(int argc, char **argv) {
       rlEnableTexture(u_tex.id);
       rlActiveTextureSlot(2);
       rlEnableTexture(v_tex.id);
-      rlActiveTextureSlot(0);
+      // rlActiveTextureSlot(0);
 
       DrawTexture(frame_tex, 0, 0, WHITE);
     }
     EndShaderMode();
 
     DrawText("Hello World!", 10, 10, 24, PURPLE);
-    DrawFPS(900, 10);
+    DrawFPS(10, 38);
     EndDrawing();
   }
 

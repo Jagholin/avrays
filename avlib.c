@@ -46,7 +46,8 @@ int initiate_decoding(DecoderContext *ctx, const char *file_name) {
                           .max_delta_time = -INFINITY,
                           .audio_time = av_make_q(0, 1),
                           .video_time = av_make_q(0, 1)};
-  pthread_mutex_init(&ctx->buffer_mtx, NULL);
+  pthread_mutex_init(&ctx->image_buffer_mtx, NULL);
+  pthread_mutex_init(&ctx->audio_buffer_mtx, NULL);
   int result = avformat_open_input(&ctx->fmt_ctx, file_name, NULL, NULL);
   ERRCHECK("Can't open file");
 
@@ -169,7 +170,7 @@ int continue_decoding(DecoderContext *ctx) {
   // danger of self deadlock
   sem_wait(&ctx->sem);
   sem_post(&ctx->sem);
-  pthread_mutex_lock(&ctx->buffer_mtx);
+  // pthread_mutex_lock(&ctx->buffer_mtx);
 
   bool frame_is_audio = false;
   int result = 0;
@@ -277,6 +278,8 @@ int continue_decoding(DecoderContext *ctx) {
       result = swr_convert_frame(ctx->swr, ctx->fr_audio_target, ctx->fr);
     }
 
+    pthread_mutex_lock(&ctx->audio_buffer_mtx);
+
     if (ctx->audio_buffer_size == 0) {
       ctx->audio_buffer_size =
           ctx->fr_audio_target->nb_samples * sizeof(float) * 2;
@@ -312,7 +315,9 @@ int continue_decoding(DecoderContext *ctx) {
     write_ringbuffer_commit(&ctx->audio_buffer, ctx->audio_buffer_size);
     // printf("Audio linesize is %d, audio time is %f\n", ctx->fr->linesize[0],
     //      ctx->audio_time);
+    pthread_mutex_unlock(&ctx->audio_buffer_mtx);
   } else {
+    pthread_mutex_lock(&ctx->image_buffer_mtx);
     number_bytes_received = av_image_copy_to_buffer(
         write_loc_image + sizeof(float), ctx->image_buffer_size,
         (const uint8_t *const *)ctx->fr->data, ctx->fr->linesize,
@@ -323,6 +328,7 @@ int continue_decoding(DecoderContext *ctx) {
         (float)ctx->video_time.num / ctx->video_time.den;
     write_ringbuffer_commit(&ctx->image_buffer, ctx->image_buffer_size);
     // printf("video time is %f\n", ctx->video_time);
+    pthread_mutex_unlock(&ctx->image_buffer_mtx);
   }
 
   ctx->delta_time = av_q2d(av_sub_q(ctx->video_time, ctx->audio_time));
@@ -345,7 +351,7 @@ int continue_decoding(DecoderContext *ctx) {
   }
   result = RESULT_OK;
 cleanup:
-  pthread_mutex_unlock(&ctx->buffer_mtx);
+  // pthread_mutex_unlock(&ctx->buffer_mtx);
   return result;
 }
 
@@ -362,7 +368,7 @@ void try_unlock_decoder_sem(DecoderContext *ctx) {
 }
 
 uint8_t *pull_image(DecoderContext *ctx, float *timestamp) {
-  pthread_mutex_lock(&ctx->buffer_mtx);
+  pthread_mutex_lock(&ctx->image_buffer_mtx);
   // printf("pull_image called\n");
   uint8_t *data =
       read_ringbuffer_chunk(&ctx->image_buffer, ctx->image_buffer_size);
@@ -374,20 +380,20 @@ uint8_t *pull_image(DecoderContext *ctx, float *timestamp) {
 
 void release_image(DecoderContext *ctx) {
   try_unlock_decoder_sem(ctx);
-  pthread_mutex_unlock(&ctx->buffer_mtx);
+  pthread_mutex_unlock(&ctx->image_buffer_mtx);
 }
 
 int pull_audio(DecoderContext *ctx, void *audio_buffer, unsigned int frames) {
   // printf("pull_audio %d called\n", frames);
-  pthread_mutex_lock(&ctx->buffer_mtx);
+  pthread_mutex_lock(&ctx->audio_buffer_mtx);
   if (!ctx->audio_configured) {
-    pthread_mutex_unlock(&ctx->buffer_mtx);
+    pthread_mutex_unlock(&ctx->audio_buffer_mtx);
     return 0;
   }
   size_t bytes_to_read = frames * 2 * sizeof(float);
   int result = read_ringbuffer(&ctx->audio_buffer, audio_buffer, bytes_to_read);
   try_unlock_decoder_sem(ctx);
-  pthread_mutex_unlock(&ctx->buffer_mtx);
+  pthread_mutex_unlock(&ctx->audio_buffer_mtx);
   return result;
 }
 

@@ -24,7 +24,6 @@ typedef struct DecoderContext {
 
   RingBuffer image_buffer;
   RingBuffer audio_buffer;
-  pthread_mutex_t buffer_mtx;
   size_t image_buffer_size;
   size_t audio_buffer_size;
   int i;
@@ -45,6 +44,8 @@ typedef struct DecoderContext {
   float max_delta_time;
   float min_delta_time;
 
+  pthread_mutex_t image_buffer_mtx;
+  pthread_mutex_t audio_buffer_mtx;
   sem_t sem;
   sem_t startup_sem;
   bool startup_happened;
