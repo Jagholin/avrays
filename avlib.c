@@ -245,11 +245,6 @@ int continue_decoding(DecoderContext *ctx) {
 
       // Retry decoding a frame
       result = avcodec_receive_frame(ctx->ctx, ctx->fr);
-      if (result != 0) {
-        // result = avcodec_receive_frame(ctx->ctxa, ctx->fr);
-        // if (result == 0)
-        //   frame_is_audio = true;
-      }
     }
     if (result == AVERROR_EOF) {
       ctx->eof_encountered = true;
@@ -268,34 +263,21 @@ int continue_decoding(DecoderContext *ctx) {
     ctx->sample_rate = ctx->fr->sample_rate;
     ctx->fr_audio_target->sample_rate = ctx->fr->sample_rate;
     result = swr_config_frame(ctx->swr, ctx->fr_audio_target, ctx->fr);
-    // result = swr_alloc_set_opts2(
-    //     &ctx->swr, &(AVChannelLayout)AV_CHANNEL_LAYOUT_STEREO,
-    //     AV_SAMPLE_FMT_FLT, ctx->fr->sample_rate, &ctx->fr->ch_layout,
-    //     ctx->fr->format, ctx->fr->sample_rate, 0, NULL);
     ERRCHECK("Cant configure SWR");
     ctx->audio_configured = true;
   }
 
-  // int number_bytes_received = av_image_copy_to_buffer(
-  //     write_loc_video, ctx->image_buffer_size,
-  //     (const uint8_t *const *)ctx->fr->data, ctx->fr->linesize,
-  //     ctx->ctx->pix_fmt, ctx->ctx->width, ctx->ctx->height, 1);
-  // write_ringbuffer_commit(&ctx->image_buffer, ctx->image_buffer_size);
-  // ERRCHECK2(number_bytes_received >= 0, "Can't copy image to buffer");
   int number_bytes_received = 0;
 
   if (frame_is_audio) {
     number_bytes_received = ctx->fr->nb_samples *
                             ctx->fr->ch_layout.nb_channels *
                             av_get_bytes_per_sample(ctx->fr->format);
-    // if (!frame_converted)
-    //   ctx->audio_time += (float)ctx->fr->nb_samples / ctx->sample_rate;
     if (!frame_converted) {
       result = swr_convert_frame(ctx->swr, ctx->fr_audio_target, ctx->fr);
     }
 
     if (ctx->audio_buffer_size == 0) {
-      // ctx->audio_buffer_size = ctx->fr_audio_target->linesize[0];
       ctx->audio_buffer_size =
           ctx->fr_audio_target->nb_samples * sizeof(float) * 2;
       // How much is 1 second of sound? sample_rate samples
@@ -319,7 +301,6 @@ int continue_decoding(DecoderContext *ctx) {
       write_loc_audio = write_ringbuffer_chunk_nocommit(&ctx->audio_buffer,
                                                         ctx->audio_buffer_size);
     }
-    // assert(ctx->fr_audio_target->linesize[0] == ctx->audio_buffer_size);
     assert(ctx->fr_audio_target->nb_samples * 8 == ctx->audio_buffer_size);
     // fwrite(ctx->fr_audio_target->data[0], 1, ctx->audio_buffer_size,
     // outfile);
@@ -364,8 +345,6 @@ int continue_decoding(DecoderContext *ctx) {
   }
   result = RESULT_OK;
 cleanup:
-  // ringbuffer_release_mtx(&ctx->audio_buffer);
-  // ringbuffer_release_mtx(&ctx->image_buffer);
   pthread_mutex_unlock(&ctx->buffer_mtx);
   return result;
 }
@@ -417,22 +396,6 @@ void free_decoder_context(DecoderContext *ctx) {
 }
 
 bool is_decoder_finished(DecoderContext *ctx) { return ctx->eof_encountered; }
-
-void ringbuffer_test() {
-  RingBuffer trb = make_ringbuffer(16);
-  uint8_t *wp = write_ringbuffer_chunk_nocommit(&trb, 4);
-  char data[8];
-  memcpy(wp, "abcd", 4);
-  write_ringbuffer_commit(&trb, 4);
-  wp = write_ringbuffer_chunk_nocommit(&trb, 4);
-  memcpy(wp, "efgh", 4);
-  write_ringbuffer_commit(&trb, 4);
-  read_ringbuffer(&trb, (uint8_t *)data, 8);
-  // write over buffer boundary
-  write_to_ringbuffer(&trb, "ijklmnopqrs", 12);
-  char data2[12];
-  read_ringbuffer(&trb, (uint8_t *)data2, 12);
-}
 
 // int main(int argc, char **argv) {
 //   if (argc < 2) {
