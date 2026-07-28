@@ -80,7 +80,7 @@ int main(int argc, char **argv) {
          times.tv_nsec);
 
   float current_volume = 0.2;
-  pthread_t decoder;
+  pthread_t decoder_thread;
 
   char *file_name = argv[1];
   int result = initiate_decoding(&dc, file_name);
@@ -88,6 +88,12 @@ int main(int argc, char **argv) {
     exit(EXIT_FAILURE);
   unsigned int scaled_width = Clamp(dc.video_width, 100, 2000);
   unsigned int scaled_height = Clamp(dc.video_height, 100, 1200);
+  float scale_factor_w = (float)scaled_width / dc.video_width;
+  float scale_factor_h = (float)scaled_height / dc.video_height;
+  float scale_factor = scale_factor_w;
+  if (scale_factor_h < scale_factor)
+    scale_factor = scale_factor_h;
+
   InitWindow(scaled_width, scaled_height, "My new window");
   InitAudioDevice();
   SetAudioStreamBufferSizeDefault(BUFFER_SIZE);
@@ -109,7 +115,7 @@ int main(int argc, char **argv) {
   Shader video_shader = LoadShaderFromMemory(NULL, fs_yuv420p);
 
   // FILE *testfile = fopen("output", "wb");
-  result = pthread_create(&decoder, NULL, &decode_thread, argv);
+  result = pthread_create(&decoder_thread, NULL, &decode_thread, argv);
   if (result) {
     printf("Couldn't create a decoder thread\n");
     return -1;
@@ -185,7 +191,8 @@ int main(int argc, char **argv) {
       rlEnableTexture(v_tex.id);
       // rlActiveTextureSlot(0);
 
-      DrawTexture(frame_tex, 0, 0, WHITE);
+      // DrawTexture(frame_tex, 0, 0, WHITE);
+      DrawTextureEx(frame_tex, (Vector2){0, 0}, 0.0, scale_factor, WHITE);
     }
     EndShaderMode();
 
