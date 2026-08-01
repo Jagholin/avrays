@@ -1,3 +1,4 @@
+#include <GL/gl.h>
 #include <raylib.h>
 #include <raymath.h>
 #include <rlgl.h>
@@ -16,15 +17,41 @@ DecoderContext dc;
 #define RAILIB_AUDIO_BUFFER_INTERNAL 4096
 #define BUFFER_SIZE (RAILIB_AUDIO_BUFFER_INTERNAL * 4)
 
+const char *fs_yuv420p10 = "#version 420\n"
+
+                           "in vec2 fragTexCoord;"
+                           "out vec4 finalColor;"
+                           "uniform sampler2D tex_luma;"
+                           "uniform sampler2D tex_u;"
+                           "uniform sampler2D tex_v;"
+                           "float samplet(sampler2D t) {"
+                           "   vec4 smp = texture(t, fragTexCoord);"
+                           "   float res = smp.r * 0.25 + smp.a * 64.0;"
+                           "   return res; }"
+                           "void main() {"
+                           "    float smp = samplet(tex_luma);"
+                           "    float luma_f = smp;"
+                           "    smp = samplet(tex_u);"
+                           "    float u_f = smp - 0.5;"
+                           "    smp = samplet(tex_v);"
+                           "    float v_f = smp - 0.5;"
+
+                           "    luma_f = 1.1643*(luma_f - 0.0625);"
+                           "    float r=luma_f+1.5958*v_f;"
+                           "    float g=luma_f-0.39173*u_f-0.81290*v_f;"
+                           "    float b=luma_f+2.017*u_f;"
+                           "    finalColor=vec4(r, g, b, 1.0);"
+                           "}";
+
 // shader code adopted from
 // https://stackoverflow.com/questions/30191911/is-it-possible-to-draw-yuv422-and-yuv420-texture-using-opengl
 const char *fs_yuv420p = "#version 420 \n"
                          "in vec2 fragTexCoord;"
                          "in vec4 fragColor;"
                          "out vec4 finalColor;"
-                         "layout(binding=0) uniform sampler2D tex_luma;"
-                         "layout(binding=1) uniform sampler2D tex_u;"
-                         "layout(binding=2) uniform sampler2D tex_v;"
+                         "uniform sampler2D tex_luma;"
+                         "uniform sampler2D tex_u;"
+                         "uniform sampler2D tex_v;"
                          "void main() {"
                          "   float luma = texture(tex_luma, fragTexCoord).r;"
                          "   float u = texture(tex_u, fragTexCoord).r;"
@@ -73,6 +100,23 @@ void *decode_thread(void *d) {
   return (void *)result;
 }
 
+Texture2D make_integer_tex(unsigned int width, unsigned int height) {
+  Texture2D new_tx = {.height = height, .width = width, .mipmaps = 1};
+  glGenTextures(1, &new_tx.id);
+  rlCheckErrors();
+  glBindTexture(GL_TEXTURE_2D, new_tx.id);
+  rlCheckErrors();
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_R16UI, width, height, 0, GL_RED_INTEGER,
+               GL_UNSIGNED_SHORT, NULL);
+  rlCheckErrors();
+
+  return new_tx;
+}
+
 int main(int argc, char **argv) {
   struct timespec times;
   clock_getres(CLOCK_MONOTONIC, &times);
@@ -100,19 +144,28 @@ int main(int argc, char **argv) {
 
   SetTargetFPS(60);
 
+  PixelFormat pf = PIXELFORMAT_UNCOMPRESSED_GRAY_ALPHA;
+  const unsigned int bytespp = 2;
+  const char *shader_code = fs_yuv420p10;
+
   Image frame_img = GenImageColor(dc.video_width, dc.video_height, BLUE);
-  ImageFormat(&frame_img, PIXELFORMAT_UNCOMPRESSED_GRAYSCALE);
+  ImageFormat(&frame_img, pf);
   Texture2D frame_tex = LoadTextureFromImage(frame_img);
 
   // Make another texture with half height and width for UV channels
   frame_img = GenImageColor(dc.video_width / 2, dc.video_height / 2, GREEN);
-  ImageFormat(&frame_img, PIXELFORMAT_UNCOMPRESSED_GRAYSCALE);
+  ImageFormat(&frame_img, pf);
   Texture2D u_tex = LoadTextureFromImage(frame_img);
   frame_img = GenImageColor(dc.video_width / 2, dc.video_height / 2, GREEN);
-  ImageFormat(&frame_img, PIXELFORMAT_UNCOMPRESSED_GRAYSCALE);
+  ImageFormat(&frame_img, pf);
   Texture2D v_tex = LoadTextureFromImage(frame_img);
 
-  Shader video_shader = LoadShaderFromMemory(NULL, fs_yuv420p);
+  Texture2D i_tex = make_integer_tex(dc.video_width, dc.video_height);
+
+  Shader video_shader = LoadShaderFromMemory(NULL, shader_code);
+  int y_location = GetShaderLocation(video_shader, "tex_luma");
+  int u_location = GetShaderLocation(video_shader, "tex_u");
+  int v_location = GetShaderLocation(video_shader, "tex_v");
 
   // FILE *testfile = fopen("output", "wb");
   result = pthread_create(&decoder_thread, NULL, &decode_thread, argv);
@@ -171,9 +224,9 @@ int main(int argc, char **argv) {
         //        ringbuffer_len(&dc.audio_buffer) / (float)(48000 * 8),
         //        ringbuffer_len(&dc.image_buffer) / dc.image_buffer_size);
         UpdateTexture(frame_tex, image_buff);
-        image_buff += dc.video_height * dc.video_width;
+        image_buff += dc.video_height * dc.video_width * bytespp;
         UpdateTexture(u_tex, image_buff);
-        image_buff += dc.video_height * dc.video_width / 4;
+        image_buff += dc.video_height * dc.video_width * bytespp / 4;
         UpdateTexture(v_tex, image_buff);
       }
       release_image(&dc);
@@ -185,11 +238,14 @@ int main(int argc, char **argv) {
 
     BeginShaderMode(video_shader);
     {
-      rlActiveTextureSlot(1);
-      rlEnableTexture(u_tex.id);
-      rlActiveTextureSlot(2);
-      rlEnableTexture(v_tex.id);
+      // rlActiveTextureSlot(1);
+      // rlEnableTexture(u_tex.id);
+      // rlActiveTextureSlot(2);
+      // rlEnableTexture(v_tex.id);
       // rlActiveTextureSlot(0);
+      SetShaderValueTexture(video_shader, y_location, frame_tex);
+      SetShaderValueTexture(video_shader, u_location, u_tex);
+      SetShaderValueTexture(video_shader, v_location, v_tex);
 
       // DrawTexture(frame_tex, 0, 0, WHITE);
       DrawTextureEx(frame_tex, (Vector2){0, 0}, 0.0, scale_factor, WHITE);
