@@ -35,6 +35,7 @@ typedef struct DecoderContext {
   // unsigned int video_bitrate, audio_bitrate;
   unsigned int video_width;
   unsigned int video_height;
+  enum AVPixelFormat pixel_format;
 
   AVRational video_tb, audio_tb;
   AVRational audio_time;

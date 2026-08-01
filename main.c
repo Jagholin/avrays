@@ -17,35 +17,37 @@ DecoderContext dc;
 #define RAILIB_AUDIO_BUFFER_INTERNAL 4096
 #define BUFFER_SIZE (RAILIB_AUDIO_BUFFER_INTERNAL * 4)
 
-const char *fs_yuv420p10 = "#version 420\n"
+const char *fs_yuv420p10 = "#version 130\n"
 
                            "in vec2 fragTexCoord;"
                            "out vec4 finalColor;"
                            "uniform sampler2D tex_luma;"
                            "uniform sampler2D tex_u;"
                            "uniform sampler2D tex_v;"
+
                            "float samplet(sampler2D t) {"
                            "   vec4 smp = texture(t, fragTexCoord);"
                            "   float res = smp.r * 0.25 + smp.a * 64.0;"
                            "   return res; }"
-                           "void main() {"
-                           "    float smp = samplet(tex_luma);"
-                           "    float luma_f = smp;"
-                           "    smp = samplet(tex_u);"
-                           "    float u_f = smp - 0.5;"
-                           "    smp = samplet(tex_v);"
-                           "    float v_f = smp - 0.5;"
 
-                           "    luma_f = 1.1643*(luma_f - 0.0625);"
-                           "    float r=luma_f+1.5958*v_f;"
-                           "    float g=luma_f-0.39173*u_f-0.81290*v_f;"
-                           "    float b=luma_f+2.017*u_f;"
-                           "    finalColor=vec4(r, g, b, 1.0);"
+                           "void main() {"
+                           "   float smp = samplet(tex_luma);"
+                           "   float luma_f = smp;"
+                           "   smp = samplet(tex_u);"
+                           "   float u_f = smp - 0.5;"
+                           "   smp = samplet(tex_v);"
+                           "   float v_f = smp - 0.5;"
+
+                           "   luma_f = 1.1643*(luma_f - 0.0625);"
+                           "   float r=luma_f+1.5958*v_f;"
+                           "   float g=luma_f-0.39173*u_f-0.81290*v_f;"
+                           "   float b=luma_f+2.017*u_f;"
+                           "   finalColor=vec4(r, g, b, 1.0);"
                            "}";
 
 // shader code adopted from
 // https://stackoverflow.com/questions/30191911/is-it-possible-to-draw-yuv422-and-yuv420-texture-using-opengl
-const char *fs_yuv420p = "#version 420 \n"
+const char *fs_yuv420p = "#version 130 \n"
                          "in vec2 fragTexCoord;"
                          "in vec4 fragColor;"
                          "out vec4 finalColor;"
@@ -100,23 +102,6 @@ void *decode_thread(void *d) {
   return (void *)result;
 }
 
-Texture2D make_integer_tex(unsigned int width, unsigned int height) {
-  Texture2D new_tx = {.height = height, .width = width, .mipmaps = 1};
-  glGenTextures(1, &new_tx.id);
-  rlCheckErrors();
-  glBindTexture(GL_TEXTURE_2D, new_tx.id);
-  rlCheckErrors();
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_R16UI, width, height, 0, GL_RED_INTEGER,
-               GL_UNSIGNED_SHORT, NULL);
-  rlCheckErrors();
-
-  return new_tx;
-}
-
 int main(int argc, char **argv) {
   struct timespec times;
   clock_getres(CLOCK_MONOTONIC, &times);
@@ -143,10 +128,25 @@ int main(int argc, char **argv) {
   SetAudioStreamBufferSizeDefault(BUFFER_SIZE);
 
   SetTargetFPS(60);
+  PixelFormat pf;
+  unsigned int bytespp;
+  const char *shader_code;
 
-  PixelFormat pf = PIXELFORMAT_UNCOMPRESSED_GRAY_ALPHA;
-  const unsigned int bytespp = 2;
-  const char *shader_code = fs_yuv420p10;
+  switch (dc.pixel_format) {
+  case AV_PIX_FMT_YUV420P:
+    pf = PIXELFORMAT_UNCOMPRESSED_GRAYSCALE;
+    bytespp = 1;
+    shader_code = fs_yuv420p;
+    break;
+  case AV_PIX_FMT_YUV420P10LE:
+    pf = PIXELFORMAT_UNCOMPRESSED_GRAY_ALPHA;
+    bytespp = 2;
+    shader_code = fs_yuv420p10;
+    break;
+  default:
+    printf("Dont recognize pix fmt %d\n", dc.pixel_format);
+    return 0;
+  }
 
   Image frame_img = GenImageColor(dc.video_width, dc.video_height, BLUE);
   ImageFormat(&frame_img, pf);
@@ -159,8 +159,6 @@ int main(int argc, char **argv) {
   frame_img = GenImageColor(dc.video_width / 2, dc.video_height / 2, GREEN);
   ImageFormat(&frame_img, pf);
   Texture2D v_tex = LoadTextureFromImage(frame_img);
-
-  Texture2D i_tex = make_integer_tex(dc.video_width, dc.video_height);
 
   Shader video_shader = LoadShaderFromMemory(NULL, shader_code);
   int y_location = GetShaderLocation(video_shader, "tex_luma");
@@ -238,11 +236,6 @@ int main(int argc, char **argv) {
 
     BeginShaderMode(video_shader);
     {
-      // rlActiveTextureSlot(1);
-      // rlEnableTexture(u_tex.id);
-      // rlActiveTextureSlot(2);
-      // rlEnableTexture(v_tex.id);
-      // rlActiveTextureSlot(0);
       SetShaderValueTexture(video_shader, y_location, frame_tex);
       SetShaderValueTexture(video_shader, u_location, u_tex);
       SetShaderValueTexture(video_shader, v_location, v_tex);

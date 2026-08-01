@@ -149,6 +149,7 @@ int initiate_decoding(DecoderContext *ctx, const char *file_name) {
   printf("Codec framerate: %d/%d\n", ctx->ctx->framerate.num,
          ctx->ctx->framerate.den);
   ctx->video_framerate = ctx->ctx->framerate;
+  ctx->pixel_format = origin_par->format;
 
   return 0;
 cleanup:
