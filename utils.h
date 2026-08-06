@@ -192,6 +192,42 @@ UTILFUNC void free_ringbuffer(RingBuffer *rb) {
   *rb = (RingBuffer){0};
 }
 
+typedef struct TimeLine {
+  void *buffer;
+  size_t elem_size;
+  unsigned int cursor;
+  size_t len;
+} TimeLine;
+
+UTILFUNC TimeLine make_timeline(size_t elem_size, size_t length) {
+  void *buf = malloc(elem_size * length);
+  memset(buf, 0, elem_size * length);
+  return (TimeLine){buf, elem_size, 0, length};
+}
+
+UTILFUNC void *timeline_push(TimeLine *self) {
+  void *result = self->buffer + self->elem_size * self->cursor;
+  self->cursor += 1;
+  if (self->cursor >= self->len) {
+    self->cursor = 0;
+  }
+  return result;
+}
+
+UTILFUNC void *timeline_get(TimeLine *self, unsigned int i) {
+  size_t off = self->cursor + i;
+  if (off >= self->len)
+    off -= self->len;
+  if (off >= self->len)
+    return NULL;
+  return self->buffer + self->elem_size * off;
+}
+
+UTILFUNC void free_timeline(TimeLine *self) {
+  free(self->buffer);
+  self->buffer = NULL;
+}
+
 #define ERRCHECK(...)                                                          \
   if (result < 0) {                                                            \
     printf("Err: ");                                                           \

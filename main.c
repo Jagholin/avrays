@@ -10,6 +10,7 @@
 
 // #include "avlib_fork.h"
 #include "avlib.h"
+#include "utils.h"
 
 const bool audio_dbg = false;
 DecoderContext dc;
@@ -102,6 +103,39 @@ void *decode_thread(void *d) {
   return (void *)result;
 }
 
+void timeline_draw_ui(TimeLine tl, int x, int y, int width, int height,
+                      unsigned int max) {
+  const unsigned short int font_size = 16;
+  char text_buffer[16];
+  snprintf(text_buffer, 16, "%d", max);
+  int text_width = MeasureText(text_buffer, font_size);
+  int zero_width = MeasureText("0", font_size);
+  int max_text_width = text_width;
+  if (zero_width > max_text_width)
+    max_text_width = zero_width;
+  DrawText(text_buffer, x + max_text_width - text_width + 1, y + 1, font_size,
+           WHITE);
+  DrawText(text_buffer, x + max_text_width - text_width, y, font_size, BLACK);
+  DrawText("0", x + max_text_width - zero_width + 1, y + height - font_size + 1,
+           font_size, WHITE);
+  DrawText("0", x + max_text_width - zero_width, y + height - font_size,
+           font_size, BLACK);
+  int gstart_x = x + max_text_width + 8;
+  float segm_size_x = (width - max_text_width - 8) / (float)(tl.len - 1);
+  DrawLine(gstart_x, y, gstart_x, y + height, GREEN);
+  DrawLine(gstart_x, y + height, x + width, y + height, GREEN);
+  DrawLine(gstart_x, y, x + width, y, GREEN);
+
+  Vector2 *line_points = calloc(tl.len, sizeof(Vector2));
+  for (unsigned int i = 0; i < tl.len; ++i) {
+    unsigned int sample = *(unsigned int *)timeline_get(&tl, i);
+    line_points[i].x = gstart_x + i * segm_size_x;
+    line_points[i].y = y + height - (float)sample * height / max;
+  }
+  DrawLineStrip(line_points, tl.len, BLUE);
+  free(line_points);
+}
+
 int main(int argc, char **argv) {
   struct timespec times;
   clock_getres(CLOCK_MONOTONIC, &times);
@@ -124,6 +158,7 @@ int main(int argc, char **argv) {
     scale_factor = scale_factor_h;
 
   InitWindow(scaled_width, scaled_height, "My new window");
+  SetWindowState(FLAG_WINDOW_ALWAYS_RUN);
   InitAudioDevice();
   SetAudioStreamBufferSizeDefault(BUFFER_SIZE);
 
@@ -165,6 +200,9 @@ int main(int argc, char **argv) {
   int u_location = GetShaderLocation(video_shader, "tex_u");
   int v_location = GetShaderLocation(video_shader, "tex_v");
 
+  TimeLine vbuffer_timeline = make_timeline(sizeof(unsigned int), 180);
+  TimeLine abuffer_timeline = make_timeline(sizeof(unsigned int), 180);
+
   // FILE *testfile = fopen("output", "wb");
   result = pthread_create(&decoder_thread, NULL, &decode_thread, argv);
   if (result) {
@@ -203,9 +241,14 @@ int main(int argc, char **argv) {
     if (video_timest < audio_timest) {
       uint8_t *image_buff = NULL;
       while (video_timest < audio_timest) {
+        uint8_t *prev_image = image_buff;
         image_buff = pull_image(&dc, &video_timest);
-        if (image_buff == NULL)
+        if (image_buff == NULL) {
+          // If we ran out of frames, just show the last one no matter the
+          // timestamp.
+          image_buff = prev_image;
           break;
+        }
         // If we are going for the next iteration, have to make sure to
         // release_image.
         // printf("incoming ts: %f\n", video_timest);
@@ -218,21 +261,21 @@ int main(int argc, char **argv) {
         printf("max cb timing: %f, min cb timing: %f\n", max_cb_timing,
                min_cb_timing);
         printf("Time since start: %g\n", GetTime() - start_ts);
-        // printf("audio queue length: %f, video queue: %zu\n",
-        //        ringbuffer_len(&dc.audio_buffer) / (float)(48000 * 8),
-        //        ringbuffer_len(&dc.image_buffer) / dc.image_buffer_size);
         UpdateTexture(frame_tex, image_buff);
         image_buff += dc.video_height * dc.video_width * bytespp;
         UpdateTexture(u_tex, image_buff);
         image_buff += dc.video_height * dc.video_width * bytespp / 4;
         UpdateTexture(v_tex, image_buff);
       }
+      printf("audio queue length: %f, video queue: %zu\n",
+             ringbuffer_len(&dc.audio_buffer) / (float)(48000 * 8),
+             ringbuffer_len(&dc.image_buffer) / dc.image_buffer_size);
       release_image(&dc);
     }
 
     BeginDrawing();
-    // printf("delta: %f, max delta: %f, min delta: %f\n", dc.delta_time,
-    //        dc.max_delta_time, dc.min_delta_time);
+    printf("delta: %f, max delta: %f, min delta: %f\n", dc.delta_time,
+           dc.max_delta_time, dc.min_delta_time);
 
     BeginShaderMode(video_shader);
     {
@@ -245,11 +288,21 @@ int main(int argc, char **argv) {
     }
     EndShaderMode();
 
+    unsigned int *tl_loc = (unsigned int *)timeline_push(&abuffer_timeline);
+    *tl_loc = ringbuffer_len(&dc.audio_buffer) * 100 / dc.audio_buffer.buf_size;
+    tl_loc = (unsigned int *)timeline_push(&vbuffer_timeline);
+    *tl_loc = ringbuffer_len(&dc.image_buffer) * 100 / dc.image_buffer.buf_size;
+
+    timeline_draw_ui(abuffer_timeline, 10, 100, 300, 80, 100);
+    timeline_draw_ui(vbuffer_timeline, 10, 200, 300, 80, 100);
+
     DrawText("Hello World!", 10, 10, 24, PURPLE);
     DrawFPS(10, 38);
     EndDrawing();
   }
 
+  free_timeline(&abuffer_timeline);
+  free_timeline(&vbuffer_timeline);
   UnloadAudioStream(stream);
   CloseAudioDevice();
   CloseWindow();
