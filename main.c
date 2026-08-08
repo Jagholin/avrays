@@ -81,7 +81,7 @@ void audio_cb(void *frame_data, unsigned int frames) {
   clock_gettime(CLOCK_MONOTONIC, &time_start);
   int size = pull_audio(&dc, frame_data, frames);
 
-  printf("pull audio returned %d\n", size);
+  // printf("pull audio returned %d\n", size);
   audio_timest = av_add_q(audio_timest, av_make_q(frames, dc.sample_rate));
   // audio_timest += (float)frames / dc.sample_rate;
   clock_gettime(CLOCK_MONOTONIC, &time_end);
@@ -271,25 +271,26 @@ int main(int argc, char **argv) {
         }
       }
       if (image_buff) {
-        printf("audio ts: %f, video ts: %f\n", audio_ts_double, video_timest);
-        printf("max cb timing: %f, min cb timing: %f\n", max_cb_timing,
-               min_cb_timing);
-        printf("Time since start: %g\n", GetTime() - start_ts);
+        // printf("audio ts: %f, video ts: %f\n", audio_ts_double,
+        // video_timest);
+        //  printf("max cb timing: %f, min cb timing: %f\n", max_cb_timing,
+        //         min_cb_timing);
+        //  printf("Time since start: %g\n", GetTime() - start_ts);
         UpdateTexture(frame_tex, image_buff);
         image_buff += dc.video_height * dc.video_width * bytespp;
         UpdateTexture(u_tex, image_buff);
         image_buff += dc.video_height * dc.video_width * bytespp / 4;
         UpdateTexture(v_tex, image_buff);
       }
-      printf("audio queue length: %f, video queue: %zu\n",
-             ringbuffer_len(&dc.audio_buffer) / (float)(48000 * 8),
-             ringbuffer_len(&dc.image_buffer) / dc.image_buffer_size);
+      // printf("audio queue length: %f, video queue: %zu\n",
+      //        ringbuffer_len(&dc.audio_buffer) / (float)(48000 * 8),
+      //        ringbuffer_len(&dc.image_buffer) / dc.image_buffer_size);
       release_image(&dc);
     }
 
     BeginDrawing();
-    printf("delta: %f, max delta: %f, min delta: %f\n", dc.delta_time,
-           dc.max_delta_time, dc.min_delta_time);
+    // printf("delta: %f, max delta: %f, min delta: %f\n", dc.delta_time,
+    //        dc.max_delta_time, dc.min_delta_time);
 
     BeginShaderMode(video_shader);
     {
@@ -307,8 +308,8 @@ int main(int argc, char **argv) {
     tl_loc = (unsigned int *)timeline_push(&vbuffer_timeline);
     *tl_loc = ringbuffer_len(&dc.image_buffer) * 100 / dc.image_buffer.buf_size;
 
-    timeline_draw_ui(abuffer_timeline, 10, 100, 300, 80, 100);
-    timeline_draw_ui(vbuffer_timeline, 10, 200, 300, 80, 100);
+    timeline_draw_ui(abuffer_timeline, 10, 50, 300, 80, 100);
+    timeline_draw_ui(vbuffer_timeline, 10, 150, 300, 80, 100);
 
     DrawFPS(10, 10);
     EndDrawing();
