@@ -68,7 +68,7 @@ const char *fs_yuv420p = "#version 130 \n"
                          "   finalColor=vec4(r, g, b, 1.0);"
                          "}";
 
-/*volatile*/ float audio_timest = 0.0;
+volatile AVRational audio_timest = (AVRational){0, 1};
 float cb_timing, min_cb_timing = INFINITY, max_cb_timing = -INFINITY;
 
 void audio_cb(void *frame_data, unsigned int frames) {
@@ -82,7 +82,8 @@ void audio_cb(void *frame_data, unsigned int frames) {
   int size = pull_audio(&dc, frame_data, frames);
 
   printf("pull audio returned %d\n", size);
-  audio_timest += (float)frames / dc.sample_rate;
+  audio_timest = av_add_q(audio_timest, av_make_q(frames, dc.sample_rate));
+  // audio_timest += (float)frames / dc.sample_rate;
   clock_gettime(CLOCK_MONOTONIC, &time_end);
   long int td = (time_end.tv_sec - time_start.tv_sec) * 1000000000 +
                 time_end.tv_nsec - time_start.tv_nsec;
@@ -249,9 +250,11 @@ int main(int argc, char **argv) {
     }
     ClearBackground(BLACK);
 
-    if (video_timest < audio_timest) {
+    double audio_ts_double = av_q2d(audio_timest);
+
+    if (video_timest < audio_ts_double) {
       uint8_t *image_buff = NULL;
-      while (video_timest < audio_timest) {
+      while (video_timest < audio_ts_double) {
         uint8_t *prev_image = image_buff;
         image_buff = pull_image(&dc, &video_timest);
         if (image_buff == NULL) {
@@ -263,12 +266,12 @@ int main(int argc, char **argv) {
         // If we are going for the next iteration, have to make sure to
         // release_image.
         // printf("incoming ts: %f\n", video_timest);
-        if (video_timest < audio_timest) {
+        if (video_timest < audio_ts_double) {
           release_image(&dc);
         }
       }
       if (image_buff) {
-        printf("audio ts: %f, video ts: %f\n", audio_timest, video_timest);
+        printf("audio ts: %f, video ts: %f\n", audio_ts_double, video_timest);
         printf("max cb timing: %f, min cb timing: %f\n", max_cb_timing,
                min_cb_timing);
         printf("Time since start: %g\n", GetTime() - start_ts);
