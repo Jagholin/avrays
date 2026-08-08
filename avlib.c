@@ -1,4 +1,3 @@
-#include <asm-generic/errno-base.h>
 #include <libavcodec/avcodec.h>
 #include <libavcodec/codec.h>
 #include <libavcodec/codec_par.h>
@@ -262,6 +261,7 @@ int continue_decoding(DecoderContext *ctx) {
   // Configure audio stuff JIT
   if (frame_is_audio && !ctx->audio_configured) {
     ctx->audio_samples_per_frame = ctx->fr->nb_samples;
+    assert(ctx->sample_rate == ctx->fr->sample_rate);
     ctx->sample_rate = ctx->fr->sample_rate;
     ctx->fr_audio_target->sample_rate = ctx->fr->sample_rate;
     result = swr_config_frame(ctx->swr, ctx->fr_audio_target, ctx->fr);
@@ -403,40 +403,3 @@ void free_decoder_context(DecoderContext *ctx) {
 }
 
 bool is_decoder_finished(DecoderContext *ctx) { return ctx->eof_encountered; }
-
-// int main(int argc, char **argv) {
-//   if (argc < 2) {
-//     printf("Not enough arguments");
-//     return 1;
-//   }
-//   outfile = fopen("audio_pure", "wb");
-//   char buff[4096];
-//   DecoderContext ctx;
-//   if (initiate_decoding(&ctx, argv[1])) {
-//     return 1;
-//   }
-//   while (true) {
-//     int result = 0;
-//     while (result == 0)
-//       result = continue_decoding(&ctx);
-//     if (result == RESULT_EOF || result == RESULT_ERROR)
-//       break;
-//
-//     // pull audio
-//     for (;;) {
-//       int bytes = pull_audio(&ctx, buff, 4096 / 8);
-//       if (bytes != 0) {
-//         // fwrite(buff, 1, bytes, outfile);
-//       } else
-//         break;
-//     }
-//     for (;;) {
-//       uint8_t *res = pull_image(&ctx);
-//       release_image(&ctx);
-//       if (res == NULL)
-//         break;
-//     }
-//   }
-//   fclose(outfile);
-//   return 0;
-// }

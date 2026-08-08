@@ -105,21 +105,20 @@ void *decode_thread(void *d) {
 
 void timeline_draw_ui(TimeLine tl, int x, int y, int width, int height,
                       unsigned int max) {
-  const unsigned short int font_size = 16;
-  char text_buffer[16];
+  const unsigned short int font_size = 20;
+  char text_buffer[80];
   snprintf(text_buffer, 16, "%d", max);
   int text_width = MeasureText(text_buffer, font_size);
   int zero_width = MeasureText("0", font_size);
   int max_text_width = text_width;
   if (zero_width > max_text_width)
     max_text_width = zero_width;
+  DrawRectangle(x - 2, y - 2, width + 4, height + 4,
+                (Color){.r = 40, .g = 40, .b = 40, .a = 190});
   DrawText(text_buffer, x + max_text_width - text_width + 1, y + 1, font_size,
            WHITE);
-  DrawText(text_buffer, x + max_text_width - text_width, y, font_size, BLACK);
   DrawText("0", x + max_text_width - zero_width + 1, y + height - font_size + 1,
            font_size, WHITE);
-  DrawText("0", x + max_text_width - zero_width, y + height - font_size,
-           font_size, BLACK);
   int gstart_x = x + max_text_width + 8;
   float segm_size_x = (width - max_text_width - 8) / (float)(tl.len - 1);
   DrawLine(gstart_x, y, gstart_x, y + height, GREEN);
@@ -127,23 +126,35 @@ void timeline_draw_ui(TimeLine tl, int x, int y, int width, int height,
   DrawLine(gstart_x, y, x + width, y, GREEN);
 
   Vector2 *line_points = calloc(tl.len, sizeof(Vector2));
+  unsigned int min_sample = max;
+  unsigned int max_sample = 0;
+  unsigned int avg = 0;
   for (unsigned int i = 0; i < tl.len; ++i) {
     unsigned int sample = *(unsigned int *)timeline_get(&tl, i);
+    avg += sample;
+    if (sample < min_sample)
+      min_sample = sample;
+    if (sample > max_sample)
+      max_sample = sample;
     line_points[i].x = gstart_x + i * segm_size_x;
     line_points[i].y = y + height - (float)sample * height / max;
   }
+  avg /= tl.len;
+
+  snprintf(text_buffer, 80, "min:%d max:%d avg:%d", min_sample, max_sample,
+           avg);
+  DrawText(text_buffer, gstart_x + 8, y + height - font_size - 2, font_size,
+           WHITE);
   DrawLineStrip(line_points, tl.len, BLUE);
   free(line_points);
 }
 
 int main(int argc, char **argv) {
-  struct timespec times;
-  clock_getres(CLOCK_MONOTONIC, &times);
-  printf("Resolution of the clock is %ld s, %ld ns\n", times.tv_sec,
-         times.tv_nsec);
-
   float current_volume = 0.2;
   pthread_t decoder_thread;
+  if (argc != 2) {
+    return 1;
+  }
 
   char *file_name = argv[1];
   int result = initiate_decoding(&dc, file_name);
@@ -157,7 +168,7 @@ int main(int argc, char **argv) {
   if (scale_factor_h < scale_factor)
     scale_factor = scale_factor_h;
 
-  InitWindow(scaled_width, scaled_height, "My new window");
+  InitWindow(scaled_width, scaled_height, file_name);
   SetWindowState(FLAG_WINDOW_ALWAYS_RUN);
   InitAudioDevice();
   SetAudioStreamBufferSizeDefault(BUFFER_SIZE);
