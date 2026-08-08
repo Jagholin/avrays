@@ -228,6 +228,7 @@ int main(int argc, char **argv) {
   SetAudioStreamCallback(stream, audio_cb);
   SetAudioStreamVolume(stream, current_volume);
   PlayAudioStream(stream);
+  bool stream_paused = false;
   double start_ts = GetTime();
 
   // unsigned int i = 0;
@@ -247,6 +248,15 @@ int main(int argc, char **argv) {
       current_volume += 0.05;
       current_volume = Clamp(current_volume, 0.0, 1.0);
       SetAudioStreamVolume(stream, current_volume);
+    }
+    if (IsKeyPressed(KEY_SPACE)) {
+      if (stream_paused) {
+        PlayAudioStream(stream);
+        stream_paused = false;
+      } else {
+        StopAudioStream(stream);
+        stream_paused = true;
+      }
     }
     ClearBackground(BLACK);
 
@@ -310,6 +320,13 @@ int main(int argc, char **argv) {
 
     timeline_draw_ui(abuffer_timeline, 10, 50, 300, 80, 100);
     timeline_draw_ui(vbuffer_timeline, 10, 150, 300, 80, 100);
+
+    if (stream_paused) {
+      DrawRectangle(scaled_width / 2 - 30, scaled_height / 2 - 50, 20, 100,
+                    ColorAlpha(WHITE, 0.8));
+      DrawRectangle(scaled_width / 2 + 10, scaled_height / 2 - 50, 20, 100,
+                    ColorAlpha(WHITE, 0.8));
+    }
 
     DrawFPS(10, 10);
     EndDrawing();
