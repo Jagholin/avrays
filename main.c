@@ -310,8 +310,7 @@ int main(int argc, char **argv) {
     timeline_draw_ui(abuffer_timeline, 10, 100, 300, 80, 100);
     timeline_draw_ui(vbuffer_timeline, 10, 200, 300, 80, 100);
 
-    DrawText("Hello World!", 10, 10, 24, PURPLE);
-    DrawFPS(10, 38);
+    DrawFPS(10, 10);
     EndDrawing();
   }
 
