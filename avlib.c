@@ -207,6 +207,7 @@ int continue_decoding(DecoderContext *ctx) {
     swr_convert_frame(ctx->swr, ctx->fr_audio_target, NULL);
     frame_converted = true;
     frame_is_audio = true;
+    printf("audio remains\n");
   } else {
     result = avcodec_receive_frame(ctx->ctx, ctx->fr);
     if (result != 0) {
@@ -269,12 +270,14 @@ int continue_decoding(DecoderContext *ctx) {
     ctx->audio_configured = true;
   }
 
-  int number_bytes_received = 0;
-
+  // int number_bytes_received = 0;
   if (frame_is_audio) {
-    number_bytes_received = ctx->fr->nb_samples *
-                            ctx->fr->ch_layout.nb_channels *
-                            av_get_bytes_per_sample(ctx->fr->format);
+    // number_bytes_received = ctx->fr->nb_samples *
+    //                         ctx->fr->ch_layout.nb_channels *
+    //                         av_get_bytes_per_sample(ctx->fr->format);
+    // These two are basically the same number
+    // printf("audio original best effort ts: %ld, pts: %ld\n",
+    //       ctx->fr->best_effort_timestamp, ctx->fr->pts);
     if (!frame_converted) {
       result = swr_convert_frame(ctx->swr, ctx->fr_audio_target, ctx->fr);
     }
@@ -319,7 +322,7 @@ int continue_decoding(DecoderContext *ctx) {
     pthread_mutex_unlock(&ctx->audio_buffer_mtx);
   } else {
     pthread_mutex_lock(&ctx->image_buffer_mtx);
-    number_bytes_received = av_image_copy_to_buffer(
+    /*number_bytes_received = */ av_image_copy_to_buffer(
         write_loc_image + sizeof(float), ctx->image_buffer_size,
         (const uint8_t *const *)ctx->fr->data, ctx->fr->linesize,
         ctx->ctx->pix_fmt, ctx->ctx->width, ctx->ctx->height, 1);
@@ -396,6 +399,16 @@ int pull_audio(DecoderContext *ctx, void *audio_buffer, unsigned int frames) {
   try_unlock_decoder_sem(ctx);
   pthread_mutex_unlock(&ctx->audio_buffer_mtx);
   return result;
+}
+
+void seek_to_frame(DecoderContext *ctx, unsigned int frame) {
+  int64_t time = av_rescale(30, ctx->video_tb.den, ctx->video_tb.num);
+  printf("seeking to %ld\n", time);
+  int result = avformat_seek_file(ctx->fmt_ctx, ctx->video_stream, 0, time,
+                                  INT64_MAX, AVSEEK_FLAG_ANY);
+  printf("Seek file returns %d\n", result);
+  avcodec_flush_buffers(ctx->ctx);
+  avcodec_flush_buffers(ctx->ctxa);
 }
 
 void free_decoder_context(DecoderContext *ctx) {

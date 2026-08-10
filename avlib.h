@@ -63,5 +63,6 @@ void release_image(DecoderContext *ctx);
 int pull_audio(DecoderContext *ctx, void *audio_buffer, unsigned int frames);
 void free_decoder_context(DecoderContext *ctx);
 bool is_decoder_finished(DecoderContext *ctx);
+void seek_to_frame(DecoderContext *ctx, unsigned int frame);
 
 #endif // !AVLIB_H
