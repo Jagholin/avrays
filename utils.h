@@ -89,7 +89,8 @@ UTILFUNC size_t write_to_ringbuffer(RingBuffer *rb, uint8_t *what, size_t len) {
   }
 
   if (capacity < len)
-    len = capacity;
+    return 0;
+  // len = capacity;
   if (len + rb->write_head > rb->buf_size) {
     // we need to separate into 2 chunks
     // first chunk is to the end of the buffer, lets calculate its size
@@ -188,8 +189,10 @@ UTILFUNC size_t ringbuffer_len(RingBuffer *rb) {
 }
 
 UTILFUNC void free_ringbuffer(RingBuffer *rb) {
-  av_free(rb->buffer);
-  *rb = (RingBuffer){0};
+  if (rb->buffer) {
+    av_free(rb->buffer);
+    *rb = (RingBuffer){0};
+  }
 }
 
 typedef struct TimeLine {
@@ -226,6 +229,55 @@ UTILFUNC void *timeline_get(TimeLine *self, unsigned int i) {
 UTILFUNC void free_timeline(TimeLine *self) {
   free(self->buffer);
   self->buffer = NULL;
+}
+
+typedef struct LinkedQueue {
+  struct LinkedQueue *pnext;
+  void *data;
+} LinkedQueue;
+
+UTILFUNC LinkedQueue *make_queue() {
+  LinkedQueue *result = calloc(1, sizeof(LinkedQueue));
+  return result;
+}
+
+UTILFUNC LinkedQueue *queue_add(LinkedQueue *q, void *data) {
+  LinkedQueue *left = NULL, *right = q;
+  while (right->pnext) {
+    left = right;
+    right = right->pnext;
+  }
+  LinkedQueue *new_link = make_queue();
+  new_link->data = data;
+  new_link->pnext = right;
+  if (left) {
+    left->pnext = new_link;
+    return q;
+  } else {
+    return new_link;
+  }
+}
+
+UTILFUNC void *queue_pop(LinkedQueue **q) {
+  void *result = (*q)->data;
+  LinkedQueue *head = *q;
+  if (head->pnext == NULL) {
+    return NULL;
+  }
+  (*q) = head->pnext;
+  free(head);
+  return result;
+}
+
+UTILFUNC void queue_free(LinkedQueue *q) {
+  while (q) {
+    LinkedQueue *t = q;
+    q = q->pnext;
+    if (t->data) {
+      free(t->data);
+    }
+    free(t);
+  }
 }
 
 #define ERRCHECK(...)                                                          \
