@@ -44,6 +44,7 @@ struct DecoderPrivate {
   bool pkt_populated;
   AVFrame *fr;
   bool fr_populated;
+  bool frame_is_audio;
   AVFrame *fr_audio_target;
   bool fr_audio_populated;
   // AVFrame *fra;
@@ -71,26 +72,10 @@ struct SeekCommand {
 };
 
 struct SeekCommand seek_command;
-DecoderContext *dc;
+static DecoderContext *dc;
 ThreadType decoder_thread;
 
-void *decode_thread(void *_) {
-  int result = 0;
-  do {
-    // If there is a seek pending, execute it
-    if (seek_command.active) {
-      printf("seeking command received, seek to %ld\n", seek_command.target);
-      seek_to_frame(dc, seek_command.target);
-      seek_command.active = false;
-    }
-    result = continue_decoding(dc);
-    if (result < 0)
-      exit(EXIT_FAILURE);
-  } while (result != RESULT_EOF);
-  return (void *)result;
-}
-
-int initiate_decoding(DecoderContext *ctx, const char *file_name) {
+int dec_init_decoder(DecoderContext *ctx, const char *file_name) {
   if (dc != NULL) {
     return RESULT_ERROR;
   }
@@ -207,7 +192,11 @@ int initiate_decoding(DecoderContext *ctx, const char *file_name) {
   ctx->video_framerate = p->ctxv->framerate;
   ctx->pixel_format = origin_par->format;
 
+  ctx->vbuffer_timeline = make_timeline(sizeof(unsigned int), 120);
+  ctx->abuffer_timeline = make_timeline(sizeof(unsigned int), 120);
+
   dc = ctx;
+  dc->state = DS_READY;
   return RESULT_OK;
 cleanup:
   free_decoder_context(ctx);
@@ -243,7 +232,7 @@ static int send_eof2codecs(struct DecoderPrivate *p) {
   return res2;
 }
 
-static int pull_frame(struct DecoderPrivate *p, bool *frame_is_audio) {
+static int pull_frame(struct DecoderPrivate *p) {
   if (p->fr_populated) {
     return RESULT_OK;
   }
@@ -252,16 +241,14 @@ static int pull_frame(struct DecoderPrivate *p, bool *frame_is_audio) {
   int result = avcodec_receive_frame(p->ctxa, p->fr);
   if (result == 0) {
     p->fr_populated = true;
-    if (frame_is_audio)
-      *frame_is_audio = true;
+    p->frame_is_audio = true;
     return RESULT_OK;
   }
   result = avcodec_receive_frame(p->ctxv, p->fr);
   if (result == 0) {
     p->fr_populated = true;
+    p->frame_is_audio = false;
   }
-  if (frame_is_audio)
-    *frame_is_audio = false;
   return result;
 }
 
@@ -285,9 +272,9 @@ static int process_video_frame(DecoderContext *ctx) {
   }
   mutex_lock(&p->image_buffer_mtx);
   av_image_copy_to_buffer(write_loc + sizeof(float),
-                          p->image_buffer_size - sizeof(float), p->fr->data,
-                          p->fr->linesize, p->ctxv->pix_fmt, p->ctxv->width,
-                          p->ctxv->height, 1);
+                          p->image_buffer_size - sizeof(float),
+                          (uint8_t const *const *)p->fr->data, p->fr->linesize,
+                          p->ctxv->pix_fmt, p->ctxv->width, p->ctxv->height, 1);
 
   ctx->video_time =
       av_mul_q(av_make_q(p->fr->best_effort_timestamp, 1), ctx->video_tb);
@@ -353,7 +340,10 @@ static int process_audio_frame(DecoderContext *ctx) {
   int result = RESULT_OK;
   if (!p->fr_audio_populated) {
     init_swr_ifneeded(ctx);
-    swr_convert_frame(p->swr, p->fr_audio_target, p->fr);
+    assert(p->fr_populated);
+    result = swr_convert_frame(p->swr, p->fr_audio_target, p->fr);
+    ERRCHECK("Cant convert audio frame");
+    p->fr_populated = false;
     p->fr_audio_populated = true;
   }
 
@@ -363,6 +353,8 @@ static int process_audio_frame(DecoderContext *ctx) {
 
   mutex_lock(&p->audio_buffer_mtx);
   size_t frame_size = p->fr_audio_target->nb_samples * sizeof(float) * 2;
+  // fwrite(p->fr->data[0], 1, p->fr->nb_samples * 8, tempfile);
+  // fflush(tempfile);
   size_t bytes_written = write_to_ringbuffer(
       &p->audio_buffer, p->fr_audio_target->data[0], frame_size);
 
@@ -374,10 +366,11 @@ static int process_audio_frame(DecoderContext *ctx) {
 
   p->fr_audio_populated = false;
   mutex_unlock(&p->audio_buffer_mtx);
+cleanup:
   return result;
 }
 
-int continue_decoding(DecoderContext *ctx) {
+int dec_continue_decoding(DecoderContext *ctx) {
   assert(ctx == dc);
   struct DecoderPrivate *p = ctx->p;
 
@@ -385,7 +378,6 @@ int continue_decoding(DecoderContext *ctx) {
   semaphore_wait(&p->sem);
   semaphore_incr(&p->sem);
 
-  bool frame_is_audio = false;
   int result = RESULT_OK;
 
   // Assert that SWR doent have any data left in its buffers
@@ -395,27 +387,29 @@ int continue_decoding(DecoderContext *ctx) {
   // 2. If we already have a frame waiting from previous iteration, just use it
   if (!(p->fr_populated || p->fr_audio_populated)) {
     // 2a. try pulling a frame
-    result = pull_frame(p, &frame_is_audio);
+    result = pull_frame(p);
 
-    if (result == AVERROR(EAGAIN)) {
+    while (result == AVERROR(EAGAIN)) {
       // 2b. frame doesn't exist, so we feed the decoder with the next packet
+      assert(p->pkt_populated == false);
       result = av_read_frame(p->fmt_ctx, p->pkt);
       if (result < 0) {
         send_eof2codecs(p);
       } else {
         p->pkt_populated = true;
-        feed_codec(p, NULL);
+        result = feed_codec(p, NULL);
+        ERRCHECK("Feed codec error");
       }
+      // 2c. try pulling a frame again if we dont have it yet
+      result = pull_frame(p);
     }
-
-    // 2c. try pulling a frame again if we dont have it yet
-    result = pull_frame(p, &frame_is_audio);
   }
-  if (result != RESULT_OK)
+  if (result != RESULT_OK) {
     goto cleanup;
+  }
 
   // 3. Process the frame that we received
-  if (frame_is_audio) {
+  if (p->frame_is_audio) {
     result = process_audio_frame(ctx);
   } else {
     result = process_video_frame(ctx);
@@ -430,6 +424,94 @@ int continue_decoding(DecoderContext *ctx) {
 
 cleanup:
   return result;
+}
+
+void try_unlock_decoder_sem(DecoderContext *ctx) {
+  int sem_value;
+  struct DecoderPrivate *p = ctx->p;
+  sem_getvalue(&p->sem, &sem_value);
+  if (sem_value == 0) {
+    // we can advance semaphore if both buffers are less than 80% empty
+    if (ringbuffer_len(&p->image_buffer) < 0.8 * p->image_buffer.buf_size &&
+        ringbuffer_len(&p->audio_buffer) < 0.8 * p->audio_buffer.buf_size) {
+      semaphore_incr(&p->sem);
+    }
+  }
+}
+
+uint8_t *dec_pull_image(DecoderContext *ctx, float *timestamp) {
+  struct DecoderPrivate *p = ctx->p;
+
+  pthread_mutex_lock(&p->image_buffer_mtx);
+  // printf("pull_image called\n");
+  uint8_t *data = read_ringbuffer_chunk(&p->image_buffer, p->image_buffer_size);
+  if (data == NULL)
+    return data;
+  *timestamp = *(float *)data;
+  return data + sizeof(float);
+}
+
+void dec_release_image(DecoderContext *ctx) {
+  try_unlock_decoder_sem(ctx);
+  mutex_unlock(&ctx->p->image_buffer_mtx);
+}
+
+int dec_pull_audio(DecoderContext *ctx, void *audio_buffer,
+                   unsigned int frames) {
+  // printf("pull_audio %d called\n", frames);
+  struct DecoderPrivate *p = ctx->p;
+  mutex_lock(&p->audio_buffer_mtx);
+  if (!p->audio_configured) {
+    mutex_unlock(&p->audio_buffer_mtx);
+    return 0;
+  }
+  size_t bytes_to_read = frames * 2 * sizeof(float);
+  int result = read_ringbuffer(&p->audio_buffer, audio_buffer, bytes_to_read);
+  try_unlock_decoder_sem(ctx);
+  mutex_unlock(&p->audio_buffer_mtx);
+  return result;
+}
+
+void *decode_thread(void *_) {
+  int result = 0;
+  static int call_count = 0;
+  // wait for dc to be populated
+  while (!dc) {
+    usleep(1000);
+  }
+  do {
+    switch (dc->state) {
+    case DS_READY:
+      if (seek_command.active) {
+        printf("seeking command received, seek to %ld\n", seek_command.target);
+        // seek_to_frame(dc, seek_command.target);
+        seek_command.active = false;
+      }
+      result = dec_continue_decoding(dc);
+      call_count++;
+      if (result < 0) {
+        if (result == AVERROR_EOF) {
+          dc->state = DS_SHUTDOWN;
+        } else {
+          char err_desc[256];
+          av_strerror(result, err_desc, 256);
+          fprintf(stderr, "Call count at err: %d, err: %d(%s)\n", call_count,
+                  result, err_desc);
+          dc->state = DS_ERROR;
+        }
+      }
+      // exit(EXIT_FAILURE);
+      break;
+    default:
+      usleep(1000);
+      break;
+    }
+  } while (dc->state != DS_SHUTDOWN);
+  return (void *)result;
+}
+
+bool dec_is_decoder_finished(DecoderContext *ctx) {
+  return ctx->state != DS_READY;
 }
 
 void free_decoder_context(DecoderContext *ctx) {
@@ -478,6 +560,9 @@ void dec_update_timelines(DecoderContext *ctx) {
 }
 
 void dec_initialize() { thread_create(&decoder_thread, &decode_thread); }
+void dec_wait_ready(DecoderContext *ctx) {
+  semaphore_wait(&ctx->p->startup_sem);
+}
 
 void dec_shutdown() { printf("Thread shutdown isn't implemented yet\n"); }
 
@@ -534,14 +619,6 @@ const char *fs_yuv420p = "#version 130 \n"
                          "   finalColor=vec4(r, g, b, 1.0);"
                          "}";
 
-typedef struct RaylibObjects {
-  Shader video_shader;
-  Texture2D tex_luma, tex_u, tex_v;
-  int y_location, u_location, v_location;
-  float video_timest;
-  unsigned int bytespp;
-} RaylibObjects;
-
 int dec_init_graphics_objects(DecoderContext *ctx, RaylibObjects *objs) {
   *objs = (RaylibObjects){};
   PixelFormat pf;
@@ -593,7 +670,7 @@ int dec_update_textures(DecoderContext *ctx, RaylibObjects *objs, float ts) {
     uint8_t *image_buff = NULL;
     while (objs->video_timest < ts) {
       uint8_t *prev_image = image_buff;
-      image_buff = pull_image(ctx, &objs->video_timest);
+      image_buff = dec_pull_image(ctx, &objs->video_timest);
       if (image_buff == NULL) {
         // If we ran out of frames, just show the last one no matter the
         // timestamp.
@@ -603,7 +680,7 @@ int dec_update_textures(DecoderContext *ctx, RaylibObjects *objs, float ts) {
       // If we are going for the next iteration, have to make sure to
       // release_image.
       if (objs->video_timest < ts) {
-        release_image(ctx);
+        dec_release_image(ctx);
       }
     }
     if (image_buff) {
@@ -613,7 +690,7 @@ int dec_update_textures(DecoderContext *ctx, RaylibObjects *objs, float ts) {
       image_buff += ctx->video_height * ctx->video_width * objs->bytespp / 4;
       UpdateTexture(objs->tex_v, image_buff);
     }
-    release_image(ctx);
+    dec_release_image(ctx);
   }
 
   return RESULT_OK;

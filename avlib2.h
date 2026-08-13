@@ -4,7 +4,9 @@
 #include "utils.h"
 #include <libavutil/pixfmt.h>
 #include <libavutil/rational.h>
+#include <raylib.h>
 #include <stdbool.h>
+#include <stdio.h>
 
 struct DecoderPrivate;
 
@@ -12,8 +14,17 @@ typedef enum DecoderState {
   DS_UNINIT = 0,
   DS_INITIALIZED,
   DS_READY,
+  DS_SHUTDOWN,
   DS_ERROR = 100,
 } DecoderState;
+
+typedef struct RaylibObjects {
+  Shader video_shader;
+  Texture2D tex_luma, tex_u, tex_v;
+  int y_location, u_location, v_location;
+  float video_timest;
+  unsigned int bytespp;
+} RaylibObjects;
 
 typedef struct DecoderContext {
   struct DecoderPrivate *p;
@@ -39,17 +50,20 @@ typedef struct DecoderContext {
   DecoderState state;
 } DecoderContext;
 
+// extern FILE *tempfile;
+
 #define RESULT_ERROR -1
 #define RESULT_OK 0
 #define RESULT_STALL 1
 #define RESULT_EOF 2
-int initiate_decoding(DecoderContext *ctx, const char *file_name);
-int continue_decoding(DecoderContext *ctx);
-uint8_t *pull_image(DecoderContext *ctx, float *timestamp);
-void release_image(DecoderContext *ctx);
-int pull_audio(DecoderContext *ctx, void *audio_buffer, unsigned int frames);
+int dec_init_decoder(DecoderContext *ctx, const char *file_name);
+// int dec_continue_decoding(DecoderContext *ctx);
+uint8_t *dec_pull_image(DecoderContext *ctx, float *timestamp);
+void dec_release_image(DecoderContext *ctx);
+int dec_pull_audio(DecoderContext *ctx, void *audio_buffer,
+                   unsigned int frames);
 void free_decoder_context(DecoderContext *ctx);
-bool is_decoder_finished(DecoderContext *ctx);
+bool dec_is_decoder_finished(DecoderContext *ctx);
 void seek_to_frame(DecoderContext *ctx, unsigned int frame);
 
 void dec_update_timelines(DecoderContext *ctx);
@@ -57,4 +71,10 @@ void dec_initialize();
 void dec_shutdown();
 void dec_wait_ready(DecoderContext *ctx);
 
+int dec_init_graphics_objects(DecoderContext *ctx, RaylibObjects *objs);
+int dec_update_textures(DecoderContext *ctx, RaylibObjects *objs, float ts);
+int dec_draw_video_textures(RaylibObjects *objs, Vector2 position,
+                            float rotation, float scale_factor, Color tint);
+void timeline_draw_ui(TimeLine tl, int x, int y, int width, int height,
+                      unsigned int max);
 #endif // !AVLIB_H
