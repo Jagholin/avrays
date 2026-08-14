@@ -11,10 +11,12 @@
 struct DecoderPrivate;
 
 typedef enum DecoderState {
-  DS_UNINIT = 0,
-  DS_INITIALIZED,
-  DS_READY,
-  DS_SHUTDOWN,
+  DS_UNINIT = 0, // default ZERO value
+  DS_READY,      // after call to dec_init_decoder
+  DS_STARTUP,    // filling buffers before playback
+  DS_PLAYING,    // actively playing the video
+  DS_FINISHED,   // video file at EOF
+  DS_SHUTDOWN,   // after call to dec_shutdown
   DS_ERROR = 100,
 } DecoderState;
 
@@ -59,20 +61,21 @@ typedef struct DecoderContext {
 #define RESULT_OK 0
 #define RESULT_STALL 1
 #define RESULT_EOF 2
-int dec_init_decoder(DecoderContext *ctx, const char *file_name);
+int dec_init_decoder(DecoderContext *ctx);
+int dec_open_file(DecoderContext *ctx, const char *file_name);
 // int dec_continue_decoding(DecoderContext *ctx);
 uint8_t *dec_pull_image(DecoderContext *ctx, float *timestamp);
 void dec_release_image(DecoderContext *ctx);
-int dec_pull_audio(DecoderContext *ctx, void *audio_buffer,
-                   unsigned int frames);
+int dec_pull_audio(DecoderContext *ctx, void *audio_buffer, unsigned int frames,
+                   volatile AVRational *ts);
 void free_decoder_context(DecoderContext *ctx);
 bool dec_is_decoder_finished(DecoderContext *ctx);
-void seek_to_frame(DecoderContext *ctx, unsigned int frame);
+void dec_seek_to_frame(DecoderContext *ctx, double ts);
 
 void dec_update_timelines(DecoderContext *ctx);
 void dec_initialize();
-void dec_shutdown();
-void dec_wait_ready(DecoderContext *ctx);
+void dec_shutdown(DecoderContext *ctx);
+// void dec_wait_ready(DecoderContext *ctx);
 
 int dec_init_graphics_objects(DecoderContext *ctx, RaylibObjects *objs);
 int dec_update_textures(DecoderContext *ctx, RaylibObjects *objs, float ts);

@@ -209,6 +209,11 @@ UTILFUNC void free_ringbuffer(RingBuffer *rb) {
   }
 }
 
+UTILFUNC void ringbuffer_flush(RingBuffer *rb) {
+  rb->read_head = 0;
+  rb->write_head = 0;
+}
+
 typedef struct TimeLine {
   void *buffer;
   size_t elem_size;

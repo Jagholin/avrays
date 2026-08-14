@@ -54,20 +54,44 @@ struct DecoderPrivate {
   RingBuffer audio_buffer;
   size_t image_buffer_size;
   size_t audio_buffer_size;
-  int i;
+  // int i;
   bool audio_configured;
-  bool eof_encountered;
+  // bool eof_encountered;
 
   MutexType image_buffer_mtx;
   MutexType audio_buffer_mtx;
   MutexType command_q_mtx;
   SemaphoreType sem;
-  SemaphoreType startup_sem;
-  bool startup_happened;
+  // SemaphoreType startup_sem;
 };
 
+const char *state_str(DecoderState st) {
+  switch (st) {
+  case DS_READY:
+    return "READY";
+  case DS_PLAYING:
+    return "PLAYING";
+  case DS_ERROR:
+    return "ERROR";
+  case DS_UNINIT:
+    return "UNINIT";
+  case DS_STARTUP:
+    return "STARTUP";
+  case DS_SHUTDOWN:
+    return "SHUTDOWN";
+  case DS_FINISHED:
+    return "FINISHED";
+  }
+}
+
+void switch_dec_state(DecoderContext *ctx, DecoderState newState) {
+  TraceLog(LOG_INFO, "VADECODER: Switching to new state: %s",
+           state_str(newState));
+  ctx->state = newState;
+}
+
 struct SeekCommand {
-  uint64_t target;
+  float target;
   bool active;
 };
 
@@ -75,7 +99,7 @@ struct SeekCommand seek_command;
 static DecoderContext *dc;
 ThreadType decoder_thread;
 
-int dec_init_decoder(DecoderContext *ctx, const char *file_name) {
+int dec_init_decoder(DecoderContext *ctx) {
   if (dc != NULL) {
     return RESULT_ERROR;
   }
@@ -91,16 +115,42 @@ int dec_init_decoder(DecoderContext *ctx, const char *file_name) {
   create_mutex(&p->audio_buffer_mtx);
   create_mutex(&p->command_q_mtx);
   create_semaphore(&p->sem, 1);
-  create_semaphore(&p->startup_sem, 0);
+  // create_semaphore(&p->startup_sem, 0);
 
+  int result = RESULT_OK;
+  p->swr = swr_alloc();
+  ERRCHECK2(p->swr, "Cant allocate audio resampler");
+
+  p->fr = av_frame_alloc();
+  ERRCHECK2(p->fr, "Cant allocate frame");
+  p->fr_audio_target = av_frame_alloc();
+  ERRCHECK2(p->fr_audio_target, "Cant allocate frame");
+  p->fr_audio_target->ch_layout = (AVChannelLayout)AV_CHANNEL_LAYOUT_STEREO;
+  p->fr_audio_target->format = AV_SAMPLE_FMT_FLT;
+
+  p->pkt = av_packet_alloc();
+  ERRCHECK2(p->pkt, "Cant allocate packet");
+
+  ctx->vbuffer_timeline = make_timeline(sizeof(unsigned int), 120);
+  ctx->abuffer_timeline = make_timeline(sizeof(unsigned int), 120);
+
+  dc = ctx;
+  // dc->state = DS_READY;
+  switch_dec_state(dc, DS_READY);
+  return RESULT_OK;
+cleanup:
+  free_decoder_context(ctx);
+  return RESULT_ERROR;
+}
+
+int dec_open_file(DecoderContext *ctx, const char *file_name) {
+  assert(ctx->state == DS_READY);
+  struct DecoderPrivate *p = ctx->p;
   int result = avformat_open_input(&p->fmt_ctx, file_name, NULL, NULL);
   ERRCHECK("Can't open file");
 
   result = avformat_find_stream_info(p->fmt_ctx, NULL);
   ERRCHECK("Cant find stream info");
-
-  p->swr = swr_alloc();
-  ERRCHECK2(p->swr, "Cant allocate audio resampler");
 
   p->video_stream =
       av_find_best_stream(p->fmt_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
@@ -143,16 +193,6 @@ int dec_init_decoder(DecoderContext *ctx, const char *file_name) {
   result = avcodec_open2(p->ctxa, audio_codec, NULL);
   ERRCHECK("Cant open audio decoder");
 
-  p->fr = av_frame_alloc();
-  ERRCHECK2(p->fr, "Cant allocate frame");
-  p->fr_audio_target = av_frame_alloc();
-  ERRCHECK2(p->fr_audio_target, "Cant allocate frame");
-  p->fr_audio_target->ch_layout = (AVChannelLayout)AV_CHANNEL_LAYOUT_STEREO;
-  p->fr_audio_target->format = AV_SAMPLE_FMT_FLT;
-
-  p->pkt = av_packet_alloc();
-  ERRCHECK2(p->pkt, "Cant allocate packet");
-
   const AVPixFmtDescriptor *pix_desc = av_pix_fmt_desc_get(p->ctxv->pix_fmt);
   printf("Frame is %dx%d (%s)\n", p->ctxv->width, p->ctxv->height,
          pix_desc->name);
@@ -192,15 +232,13 @@ int dec_init_decoder(DecoderContext *ctx, const char *file_name) {
   ctx->video_framerate = p->ctxv->framerate;
   ctx->pixel_format = origin_par->format;
 
-  ctx->vbuffer_timeline = make_timeline(sizeof(unsigned int), 120);
-  ctx->abuffer_timeline = make_timeline(sizeof(unsigned int), 120);
+  // ctx->state = DS_STARTUP;
+  switch_dec_state(ctx, DS_STARTUP);
 
-  dc = ctx;
-  dc->state = DS_READY;
   return RESULT_OK;
 cleanup:
-  free_decoder_context(ctx);
-  return RESULT_ERROR;
+  // TODO: cleanup
+  return result;
 }
 
 // Feeds packet pkt to video or audio decoder
@@ -253,11 +291,12 @@ static int pull_frame(struct DecoderPrivate *p) {
   return result;
 }
 
-static void signal_startup(struct DecoderPrivate *ctx) {
-  if (ctx->startup_happened)
+static void signal_startup(DecoderContext *ctx) {
+  if (ctx->state != DS_STARTUP)
     return;
-  sem_post(&ctx->startup_sem);
-  ctx->startup_happened = true;
+  // semaphore_incr(&ctx->p->startup_sem);
+  // ctx->state = DS_PLAYING;
+  switch_dec_state(ctx, DS_PLAYING);
 }
 
 static int process_video_frame(DecoderContext *ctx) {
@@ -375,6 +414,9 @@ cleanup:
 
 int dec_continue_decoding(DecoderContext *ctx) {
   assert(ctx == dc);
+  if (ctx->state != DS_PLAYING && ctx->state != DS_STARTUP) {
+    return RESULT_OK;
+  }
   struct DecoderPrivate *p = ctx->p;
 
   // 1. Wait for decoding semaphore to release
@@ -420,7 +462,7 @@ int dec_continue_decoding(DecoderContext *ctx) {
   // 4. If the buffer is full, signal stall condition
   if (result == RESULT_STALL) {
     // 4a. If we are in a startup state, signal that we decoded enough.
-    signal_startup(p);
+    signal_startup(ctx);
     semaphore_wait(&p->sem);
     goto cleanup;
   }
@@ -445,7 +487,10 @@ void try_unlock_decoder_sem(DecoderContext *ctx) {
 uint8_t *dec_pull_image(DecoderContext *ctx, float *timestamp) {
   struct DecoderPrivate *p = ctx->p;
 
-  pthread_mutex_lock(&p->image_buffer_mtx);
+  mutex_lock(&p->image_buffer_mtx);
+  if (ctx->state != DS_PLAYING) {
+    return NULL;
+  }
   // printf("pull_image called\n");
   uint8_t *data = read_ringbuffer_chunk(&p->image_buffer, p->image_buffer_size);
   if (data == NULL)
@@ -460,10 +505,13 @@ void dec_release_image(DecoderContext *ctx) {
   mutex_unlock(&ctx->p->image_buffer_mtx);
 }
 
-int dec_pull_audio(DecoderContext *ctx, void *audio_buffer,
-                   unsigned int frames) {
+int dec_pull_audio(DecoderContext *ctx, void *audio_buffer, unsigned int frames,
+                   volatile AVRational *ts) {
   // printf("pull_audio %d called\n", frames);
   struct DecoderPrivate *p = ctx->p;
+  if (ctx->state != DS_PLAYING) {
+    return 0;
+  }
   mutex_lock(&p->audio_buffer_mtx);
   if (!p->audio_configured) {
     mutex_unlock(&p->audio_buffer_mtx);
@@ -473,8 +521,42 @@ int dec_pull_audio(DecoderContext *ctx, void *audio_buffer,
   int result = read_ringbuffer(&p->audio_buffer, audio_buffer, bytes_to_read);
   ctx->abytes_pulled += result;
   try_unlock_decoder_sem(ctx);
+  const int bytes_per_frame = sizeof(float) * 2;
+  *ts = av_add_q(*ts, av_make_q(result / bytes_per_frame, ctx->sample_rate));
   mutex_unlock(&p->audio_buffer_mtx);
   return result;
+}
+
+void dec_seek_to_frame(DecoderContext *ctx, double ts) {
+  int64_t time = floor(ts * ctx->video_tb.den / ctx->video_tb.num);
+  struct DecoderPrivate *p = ctx->p;
+  mutex_lock(&p->audio_buffer_mtx);
+  mutex_lock(&p->image_buffer_mtx);
+  printf("seeking to %ld\n", time);
+  int result = avformat_seek_file(p->fmt_ctx, p->video_stream, 0, time,
+                                  INT64_MAX, AVSEEK_FLAG_ANY);
+  printf("Seek file returns %d\n", result);
+  avcodec_flush_buffers(p->ctxv);
+  avcodec_flush_buffers(p->ctxa);
+  if (ctx->state != DS_STARTUP) {
+    // repurpose "startup" tech here
+    assert(ctx->state == DS_PLAYING);
+    // ctx->state = DS_STARTUP;
+    switch_dec_state(ctx, DS_STARTUP);
+    // decrease semaphore count, it should now become 0
+    // semaphore_wait(&p->startup_sem);
+  }
+  ringbuffer_flush(&p->audio_buffer);
+  ringbuffer_flush(&p->image_buffer);
+  p->fr_audio_populated = false;
+  p->fr_populated = false;
+  if (p->pkt_populated) {
+    p->pkt_populated = false;
+    av_packet_unref(p->pkt);
+  }
+  try_unlock_decoder_sem(ctx);
+  mutex_unlock(&p->image_buffer_mtx);
+  mutex_unlock(&p->audio_buffer_mtx);
 }
 
 void *decode_thread(void *_) {
@@ -486,23 +568,27 @@ void *decode_thread(void *_) {
   }
   do {
     switch (dc->state) {
-    case DS_READY:
+    case DS_PLAYING:
       if (seek_command.active) {
         printf("seeking command received, seek to %ld\n", seek_command.target);
         // seek_to_frame(dc, seek_command.target);
         seek_command.active = false;
       }
+      // FALLTHROUGH
+    case DS_STARTUP:
       result = dec_continue_decoding(dc);
       call_count++;
       if (result < 0) {
         if (result == AVERROR_EOF) {
-          dc->state = DS_SHUTDOWN;
+          // dc->state = DS_SHUTDOWN;
+          switch_dec_state(dc, DS_FINISHED);
         } else {
           char err_desc[256];
           av_strerror(result, err_desc, 256);
           fprintf(stderr, "Call count at err: %d, err: %d(%s)\n", call_count,
                   result, err_desc);
-          dc->state = DS_ERROR;
+          // dc->state = DS_ERROR;
+          switch_dec_state(dc, DS_ERROR);
         }
       }
       // exit(EXIT_FAILURE);
@@ -516,7 +602,8 @@ void *decode_thread(void *_) {
 }
 
 bool dec_is_decoder_finished(DecoderContext *ctx) {
-  return ctx->state != DS_READY;
+  return ctx->state == DS_SHUTDOWN || ctx->state == DS_FINISHED ||
+         ctx->state == DS_ERROR;
 }
 
 void free_decoder_context(DecoderContext *ctx) {
@@ -524,7 +611,7 @@ void free_decoder_context(DecoderContext *ctx) {
   struct DecoderPrivate *p = ctx->p;
 
   free_semaphore(&p->sem);
-  free_semaphore(&p->startup_sem);
+  // free_semaphore(&p->startup_sem);
   free_mutex(&p->command_q_mtx);
   free_mutex(&p->audio_buffer_mtx);
   free_mutex(&p->image_buffer_mtx);
@@ -559,17 +646,25 @@ void free_decoder_context(DecoderContext *ctx) {
 void dec_update_timelines(DecoderContext *ctx) {
   struct DecoderPrivate *p = ctx->p;
   unsigned int *tl_loc = (unsigned int *)timeline_push(&ctx->abuffer_timeline);
-  *tl_loc = ringbuffer_len(&p->audio_buffer) * 100 / p->audio_buffer.buf_size;
+  if (p->audio_buffer_size > 0) {
+    *tl_loc = ringbuffer_len(&p->audio_buffer) * 100 / p->audio_buffer.buf_size;
+  } else {
+    *tl_loc = 0;
+  }
   tl_loc = (unsigned int *)timeline_push(&ctx->vbuffer_timeline);
   *tl_loc = ringbuffer_len(&p->image_buffer) * 100 / p->image_buffer.buf_size;
 }
 
 void dec_initialize() { thread_create(&decoder_thread, &decode_thread); }
-void dec_wait_ready(DecoderContext *ctx) {
-  semaphore_wait(&ctx->p->startup_sem);
-}
+// void dec_wait_ready(DecoderContext *ctx) {
+//   semaphore_wait(&ctx->p->startup_sem);
+// }
 
-void dec_shutdown() { printf("Thread shutdown isn't implemented yet\n"); }
+void dec_shutdown(DecoderContext *ctx) {
+  printf("Thread shutdown isn't implemented yet\n");
+  switch_dec_state(ctx, DS_SHUTDOWN);
+  // TODO: implement
+}
 
 // Raylib specific things
 #include <raylib.h>

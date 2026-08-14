@@ -4,6 +4,7 @@
 #include <rlgl.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <threads.h>
 #include <time.h>
 #include <unistd.h>
@@ -33,8 +34,7 @@ void audio_cb(void *frame_data, unsigned int frames) {
   // 2);
   struct timespec time_start, time_end;
   clock_gettime(CLOCK_MONOTONIC, &time_start);
-  int size = dec_pull_audio(&dc, frame_data, frames);
-  const int bytes_per_frame = sizeof(float) * 2;
+  /*int size = */ dec_pull_audio(&dc, frame_data, frames, &audio_timest);
 
   // printf("pull audio returned %d\n", size);
   static bool info_given = false;
@@ -42,8 +42,6 @@ void audio_cb(void *frame_data, unsigned int frames) {
     TraceLog(LOG_INFO, "sample rate: %d", dc.sample_rate);
     info_given = true;
   }
-  audio_timest =
-      av_add_q(audio_timest, av_make_q(size / bytes_per_frame, dc.sample_rate));
   // audio_timest += (float)frames / dc.sample_rate;
   clock_gettime(CLOCK_MONOTONIC, &time_end);
   long int td = (time_end.tv_sec - time_start.tv_sec) * 1000000000 +
@@ -64,9 +62,13 @@ int main(int argc, char **argv) {
 
   char *file_name = argv[1];
   dec_initialize();
-  int result = dec_init_decoder(&dc, file_name);
+  int result = dec_init_decoder(&dc);
   if (result != 0)
     exit(EXIT_FAILURE);
+  result = dec_open_file(&dc, file_name);
+  if (result != 0)
+    exit(EXIT_FAILURE);
+
   unsigned int scaled_width = Clamp(dc.video_width, 100, 2000);
   unsigned int scaled_height = Clamp(dc.video_height, 100, 1200);
   float scale_factor_w = (float)scaled_width / dc.video_width;
@@ -83,7 +85,7 @@ int main(int argc, char **argv) {
   SetTargetFPS(60);
   RaylibObjects video_tex;
   dec_init_graphics_objects(&dc, &video_tex);
-  dec_wait_ready(&dc);
+  // dec_wait_ready(&dc);
 
   AudioStream stream = LoadAudioStream(dc.sample_rate, 32, 2);
   SetAudioStreamCallback(stream, audio_cb);
@@ -160,6 +162,7 @@ int main(int argc, char **argv) {
 
   // free_timeline(&abuffer_timeline);
   // free_timeline(&vbuffer_timeline);
+  dec_shutdown(&dc);
   UnloadAudioStream(stream);
   CloseAudioDevice();
   CloseWindow();
