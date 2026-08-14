@@ -6,7 +6,6 @@
 #include <libavutil/rational.h>
 #include <raylib.h>
 #include <stdbool.h>
-#include <stdio.h>
 
 struct DecoderPrivate;
 

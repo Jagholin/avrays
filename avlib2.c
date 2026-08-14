@@ -613,6 +613,7 @@ void *decode_thread(void *_) {
       break;
     }
   } while (dc->state != DS_SHUTDOWN);
+  TraceLog(LOG_INFO, "VADECODER: Decode THREAD shutdown.");
   return (void *)result;
 }
 
@@ -676,8 +677,12 @@ void dec_initialize() { thread_create(&decoder_thread, &decode_thread); }
 // }
 
 void dec_shutdown(DecoderContext *ctx) {
-  printf("Thread shutdown isn't implemented yet\n");
+  // printf("Thread shutdown isn't implemented yet\n");
   switch_dec_state(ctx, DS_SHUTDOWN);
+  // Release semaphore sem so that dec_continue_decoding could proceed
+  semaphore_incr(&ctx->p->sem);
+  pthread_join(decoder_thread, NULL);
+  free_decoder_context(ctx);
   // TODO: implement
 }
 
