@@ -74,8 +74,19 @@ UTILFUNC RingBuffer make_ringbuffer(size_t len) {
   return (RingBuffer){.buffer = temp, .buf_size = len};
 }
 
+UTILFUNC size_t ringbuffer_len(RingBuffer *rb) {
+  // The size is the distance from read head to write head
+  if (rb->write_head >= rb->read_head)
+    return rb->write_head - rb->read_head;
+  // rb->write_head < rb->read_head
+  size_t result = rb->buf_size - rb->read_head;
+  result += rb->write_head;
+  return result;
+}
+
 UTILFUNC size_t write_to_ringbuffer(RingBuffer *rb, uint8_t *what, size_t len) {
   // calculate capacity
+  size_t len_before = ringbuffer_len(rb);
   size_t capacity = 0;
   if (rb->write_head >= rb->read_head) {
     capacity = rb->buf_size - rb->write_head;
@@ -88,7 +99,7 @@ UTILFUNC size_t write_to_ringbuffer(RingBuffer *rb, uint8_t *what, size_t len) {
     return 0;
   }
 
-  if (capacity < len)
+  if (capacity <= len)
     return 0;
   // len = capacity;
   if (len + rb->write_head > rb->buf_size) {
@@ -100,10 +111,14 @@ UTILFUNC size_t write_to_ringbuffer(RingBuffer *rb, uint8_t *what, size_t len) {
     memcpy(rb->buffer + rb->write_head, what, first_ch_len);
     memcpy(rb->buffer, what + first_ch_len, second_ch_len);
     rb->write_head = second_ch_len;
+    size_t len_after = ringbuffer_len(rb);
+    assert(len_after - len_before == len);
     return len;
   } else {
     memcpy(rb->buffer + rb->write_head, what, len);
     rb->write_head += len;
+    size_t len_after = ringbuffer_len(rb);
+    assert(len_after - len_before == len);
     return len;
   }
 }
@@ -127,13 +142,17 @@ UTILFUNC uint8_t *write_ringbuffer_chunk_nocommit(RingBuffer *rb, size_t len) {
 }
 
 UTILFUNC void write_ringbuffer_commit(RingBuffer *rb, size_t len) {
+  size_t len_before = ringbuffer_len(rb);
   rb->write_head += len;
   assert(rb->write_head <= rb->buf_size);
   if (rb->write_head == rb->buf_size)
     rb->write_head = 0;
+  size_t len_after = ringbuffer_len(rb);
+  assert(len_after - len_before == len);
 }
 
 UTILFUNC uint8_t *read_ringbuffer_chunk(RingBuffer *rb, size_t len) {
+  size_t len_before = ringbuffer_len(rb);
   // this function only works if reading doesn't cross rb's boundary
   assert(rb->buf_size % len == 0);
   if (rb->read_head + len > rb->buf_size) {
@@ -150,10 +169,13 @@ UTILFUNC uint8_t *read_ringbuffer_chunk(RingBuffer *rb, size_t len) {
   assert(rb->read_head <= rb->buf_size);
   if (rb->read_head == rb->buf_size)
     rb->read_head = 0;
+  size_t len_after = ringbuffer_len(rb);
+  assert(len_before - len_after == len);
   return result;
 }
 
 UTILFUNC size_t read_ringbuffer(RingBuffer *rb, uint8_t *dest, size_t len) {
+  size_t len_before = ringbuffer_len(rb);
   size_t data_available = 0;
   if (rb->write_head >= rb->read_head) {
     data_available += rb->write_head - rb->read_head;
@@ -175,17 +197,9 @@ UTILFUNC size_t read_ringbuffer(RingBuffer *rb, uint8_t *dest, size_t len) {
     memcpy(dest, rb->buffer + rb->read_head, len);
     rb->read_head += len;
   }
+  size_t len_after = ringbuffer_len(rb);
+  assert(len_before - len_after == len);
   return len;
-}
-
-UTILFUNC size_t ringbuffer_len(RingBuffer *rb) {
-  // The size is the distance from read head to write head
-  if (rb->write_head >= rb->read_head)
-    return rb->write_head - rb->read_head;
-  // rb->write_head < rb->read_head
-  size_t result = rb->buf_size - rb->read_head;
-  result += rb->write_head;
-  return result;
 }
 
 UTILFUNC void free_ringbuffer(RingBuffer *rb) {

@@ -21,6 +21,8 @@ const bool audio_dbg = false;
 
 volatile AVRational audio_timest = (AVRational){0, 1};
 float cb_timing, min_cb_timing = INFINITY, max_cb_timing = -INFINITY;
+// struct timespec StartTime;
+// bool video_just_started = false;
 DecoderContext dc;
 
 void audio_cb(void *frame_data, unsigned int frames) {
@@ -32,9 +34,16 @@ void audio_cb(void *frame_data, unsigned int frames) {
   struct timespec time_start, time_end;
   clock_gettime(CLOCK_MONOTONIC, &time_start);
   int size = dec_pull_audio(&dc, frame_data, frames);
+  const int bytes_per_frame = sizeof(float) * 2;
 
   // printf("pull audio returned %d\n", size);
-  audio_timest = av_add_q(audio_timest, av_make_q(frames, dc.sample_rate));
+  static bool info_given = false;
+  if (!info_given) {
+    TraceLog(LOG_INFO, "sample rate: %d", dc.sample_rate);
+    info_given = true;
+  }
+  audio_timest =
+      av_add_q(audio_timest, av_make_q(size / bytes_per_frame, dc.sample_rate));
   // audio_timest += (float)frames / dc.sample_rate;
   clock_gettime(CLOCK_MONOTONIC, &time_end);
   long int td = (time_end.tv_sec - time_start.tv_sec) * 1000000000 +
@@ -69,7 +78,7 @@ int main(int argc, char **argv) {
   InitWindow(scaled_width, scaled_height, file_name);
   SetWindowState(FLAG_WINDOW_ALWAYS_RUN);
   InitAudioDevice();
-  // SetAudioStreamBufferSizeDefault(BUFFER_SIZE);
+  SetAudioStreamBufferSizeDefault(BUFFER_SIZE);
 
   SetTargetFPS(60);
   RaylibObjects video_tex;
@@ -111,6 +120,7 @@ int main(int argc, char **argv) {
 
     double audio_ts_double = av_q2d(audio_timest);
     dec_update_textures(&dc, &video_tex, audio_ts_double);
+    video_timest = video_tex.video_timest;
 
     BeginDrawing();
     // printf("delta: %f, max delta: %f, min delta: %f\n", dc.delta_time,
@@ -119,10 +129,23 @@ int main(int argc, char **argv) {
     dec_draw_video_textures(&video_tex, (Vector2){0, 0}, 0.0, scale_factor,
                             WHITE);
 
-    dec_update_timelines(&dc);
+    if (!stream_paused)
+      dec_update_timelines(&dc);
 
     timeline_draw_ui(dc.abuffer_timeline, 10, 50, 300, 80, 100);
     timeline_draw_ui(dc.vbuffer_timeline, 10, 150, 300, 80, 100);
+    char msg[128];
+    snprintf(msg, sizeof(msg), "atime: %.2f vtime: %.2f d: %.2f f: %d",
+             audio_ts_double, video_timest,
+             fabs(audio_ts_double - video_timest), video_tex.frame_counter);
+
+    DrawText(msg, 10, 250, 20, WHITE);
+    snprintf(msg, sizeof(msg), "abytes: %ld written: %ld", dc.abytes_pulled,
+             dc.abytes_written);
+    DrawText(msg, 10, 275, 20, WHITE);
+    snprintf(msg, sizeof(msg), "vbytes: %ld, written: %ld", dc.vbytes_pulled,
+             dc.vbytes_written);
+    DrawText(msg, 10, 300, 20, WHITE);
 
     if (stream_paused) {
       DrawRectangle(scaled_width / 2 - 30, scaled_height / 2 - 50, 20, 100,

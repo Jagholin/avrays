@@ -23,6 +23,7 @@ typedef struct RaylibObjects {
   Texture2D tex_luma, tex_u, tex_v;
   int y_location, u_location, v_location;
   float video_timest;
+  unsigned int frame_counter;
   unsigned int bytespp;
 } RaylibObjects;
 
@@ -46,6 +47,8 @@ typedef struct DecoderContext {
 
   TimeLine vbuffer_timeline;
   TimeLine abuffer_timeline;
+  unsigned long int abytes_pulled, vbytes_pulled;
+  unsigned long int abytes_written, vbytes_written;
 
   DecoderState state;
 } DecoderContext;

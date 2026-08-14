@@ -234,6 +234,7 @@ static int send_eof2codecs(struct DecoderPrivate *p) {
 
 static int pull_frame(struct DecoderPrivate *p) {
   if (p->fr_populated) {
+    printf("pull_frame shortcut\n");
     return RESULT_OK;
   }
 
@@ -281,6 +282,7 @@ static int process_video_frame(DecoderContext *ctx) {
   (*(float *)write_loc) = (float)ctx->video_time.num / ctx->video_time.den;
 
   write_ringbuffer_commit(&p->image_buffer, p->image_buffer_size);
+  ctx->vbytes_written += p->image_buffer_size;
   mutex_unlock(&p->image_buffer_mtx);
   p->fr_populated = false;
   return result;
@@ -357,6 +359,7 @@ static int process_audio_frame(DecoderContext *ctx) {
   // fflush(tempfile);
   size_t bytes_written = write_to_ringbuffer(
       &p->audio_buffer, p->fr_audio_target->data[0], frame_size);
+  ctx->abytes_written += bytes_written;
 
   if (bytes_written == 0) {
     // No space left in the buffer, indicate STALL condition
@@ -447,6 +450,7 @@ uint8_t *dec_pull_image(DecoderContext *ctx, float *timestamp) {
   uint8_t *data = read_ringbuffer_chunk(&p->image_buffer, p->image_buffer_size);
   if (data == NULL)
     return data;
+  ctx->vbytes_pulled += p->image_buffer_size;
   *timestamp = *(float *)data;
   return data + sizeof(float);
 }
@@ -467,6 +471,7 @@ int dec_pull_audio(DecoderContext *ctx, void *audio_buffer,
   }
   size_t bytes_to_read = frames * 2 * sizeof(float);
   int result = read_ringbuffer(&p->audio_buffer, audio_buffer, bytes_to_read);
+  ctx->abytes_pulled += result;
   try_unlock_decoder_sem(ctx);
   mutex_unlock(&p->audio_buffer_mtx);
   return result;
@@ -677,6 +682,7 @@ int dec_update_textures(DecoderContext *ctx, RaylibObjects *objs, float ts) {
         image_buff = prev_image;
         break;
       }
+      objs->frame_counter++;
       // If we are going for the next iteration, have to make sure to
       // release_image.
       if (objs->video_timest < ts) {
