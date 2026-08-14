@@ -185,7 +185,8 @@ UTILFUNC size_t read_ringbuffer(RingBuffer *rb, uint8_t *dest, size_t len) {
   }
 
   if (data_available < len) {
-    return 0;
+    // return 0;
+    len = data_available;
   }
   if (rb->read_head + len > rb->buf_size) {
     size_t first_ch_len = rb->buf_size - rb->read_head;

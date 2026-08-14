@@ -79,8 +79,12 @@ const char *state_str(DecoderState st) {
     return "STARTUP";
   case DS_SHUTDOWN:
     return "SHUTDOWN";
+  case DS_FILEEOF:
+    return "FILEEOF";
   case DS_FINISHED:
     return "FINISHED";
+  default:
+    return "UNKNOWN?";
   }
 }
 
@@ -484,17 +488,28 @@ void try_unlock_decoder_sem(DecoderContext *ctx) {
   }
 }
 
+void try_move_to_finished_state(DecoderContext *ctx) {
+  if (ctx->state != DS_FILEEOF)
+    return;
+  if (ringbuffer_len(&ctx->p->audio_buffer) == 0 &&
+      ringbuffer_len(&ctx->p->image_buffer) == 0) {
+    switch_dec_state(ctx, DS_FINISHED);
+  }
+}
+
 uint8_t *dec_pull_image(DecoderContext *ctx, float *timestamp) {
   struct DecoderPrivate *p = ctx->p;
 
   mutex_lock(&p->image_buffer_mtx);
-  if (ctx->state != DS_PLAYING) {
+  if (ctx->state != DS_PLAYING && ctx->state != DS_FILEEOF) {
     return NULL;
   }
   // printf("pull_image called\n");
   uint8_t *data = read_ringbuffer_chunk(&p->image_buffer, p->image_buffer_size);
-  if (data == NULL)
+  if (data == NULL) {
+    try_move_to_finished_state(ctx);
     return data;
+  }
   ctx->vbytes_pulled += p->image_buffer_size;
   *timestamp = *(float *)data;
   return data + sizeof(float);
@@ -509,7 +524,7 @@ int dec_pull_audio(DecoderContext *ctx, void *audio_buffer, unsigned int frames,
                    volatile AVRational *ts) {
   // printf("pull_audio %d called\n", frames);
   struct DecoderPrivate *p = ctx->p;
-  if (ctx->state != DS_PLAYING) {
+  if (ctx->state != DS_PLAYING && ctx->state != DS_FILEEOF) {
     return 0;
   }
   mutex_lock(&p->audio_buffer_mtx);
@@ -581,7 +596,7 @@ void *decode_thread(void *_) {
       if (result < 0) {
         if (result == AVERROR_EOF) {
           // dc->state = DS_SHUTDOWN;
-          switch_dec_state(dc, DS_FINISHED);
+          switch_dec_state(dc, DS_FILEEOF);
         } else {
           char err_desc[256];
           av_strerror(result, err_desc, 256);
@@ -856,4 +871,30 @@ void timeline_draw_ui(TimeLine tl, int x, int y, int width, int height,
            WHITE);
   DrawLineStrip(line_points, tl.len, BLUE);
   free(line_points);
+}
+
+void dec_draw_debug_overlay(DecoderContext *ctx, RaylibObjects *objs,
+                            double audio_ts_double, int x, int y) {
+  struct DecoderPrivate *p = ctx->p;
+  timeline_draw_ui(ctx->abuffer_timeline, x, y, 300, 80, 100);
+  timeline_draw_ui(ctx->vbuffer_timeline, x, y + 100, 300, 80, 100);
+  char msg[128];
+  snprintf(msg, sizeof(msg), "atime: %.2f vtime: %.2f d: %.2f f: %d",
+           audio_ts_double, objs->video_timest,
+           fabs(audio_ts_double - objs->video_timest), objs->frame_counter);
+
+  DrawText(msg, x, y + 200, 20, WHITE);
+  snprintf(msg, sizeof(msg), "abytes: %ld written: %ld", ctx->abytes_pulled,
+           ctx->abytes_written);
+  DrawText(msg, x, y + 225, 20, WHITE);
+  snprintf(msg, sizeof(msg), "vbytes: %ld, written: %ld", ctx->vbytes_pulled,
+           ctx->vbytes_written);
+  DrawText(msg, x, y + 250, 20, WHITE);
+
+  if (p) {
+    snprintf(msg, sizeof(msg), "abuffer: %zu vbuffer: %zu",
+             ringbuffer_len(&p->audio_buffer),
+             ringbuffer_len(&p->image_buffer));
+    DrawText(msg, x, y + 275, 20, WHITE);
+  }
 }

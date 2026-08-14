@@ -134,20 +134,7 @@ int main(int argc, char **argv) {
     if (!stream_paused)
       dec_update_timelines(&dc);
 
-    timeline_draw_ui(dc.abuffer_timeline, 10, 50, 300, 80, 100);
-    timeline_draw_ui(dc.vbuffer_timeline, 10, 150, 300, 80, 100);
-    char msg[128];
-    snprintf(msg, sizeof(msg), "atime: %.2f vtime: %.2f d: %.2f f: %d",
-             audio_ts_double, video_timest,
-             fabs(audio_ts_double - video_timest), video_tex.frame_counter);
-
-    DrawText(msg, 10, 250, 20, WHITE);
-    snprintf(msg, sizeof(msg), "abytes: %ld written: %ld", dc.abytes_pulled,
-             dc.abytes_written);
-    DrawText(msg, 10, 275, 20, WHITE);
-    snprintf(msg, sizeof(msg), "vbytes: %ld, written: %ld", dc.vbytes_pulled,
-             dc.vbytes_written);
-    DrawText(msg, 10, 300, 20, WHITE);
+    dec_draw_debug_overlay(&dc, &video_tex, audio_ts_double, 10, 50);
 
     if (stream_paused) {
       DrawRectangle(scaled_width / 2 - 30, scaled_height / 2 - 50, 20, 100,

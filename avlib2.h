@@ -15,7 +15,8 @@ typedef enum DecoderState {
   DS_READY,      // after call to dec_init_decoder
   DS_STARTUP,    // filling buffers before playback
   DS_PLAYING,    // actively playing the video
-  DS_FINISHED,   // video file at EOF
+  DS_FILEEOF,    // video file at EOF
+  DS_FINISHED,   // File at EOF and buffers are empty
   DS_SHUTDOWN,   // after call to dec_shutdown
   DS_ERROR = 100,
 } DecoderState;
@@ -83,4 +84,6 @@ int dec_draw_video_textures(RaylibObjects *objs, Vector2 position,
                             float rotation, float scale_factor, Color tint);
 void timeline_draw_ui(TimeLine tl, int x, int y, int width, int height,
                       unsigned int max);
+void dec_draw_debug_overlay(DecoderContext *ctx, RaylibObjects *objs,
+                            double audio_ts, int x, int y);
 #endif // !AVLIB_H
