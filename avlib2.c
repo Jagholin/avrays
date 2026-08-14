@@ -16,6 +16,8 @@ typedef pthread_mutex_t MutexType;
 typedef sem_t SemaphoreType;
 typedef pthread_t ThreadType;
 
+int seek_to_frame(DecoderContext *ctx, double ts);
+
 void create_mutex(MutexType *m) { pthread_mutex_init(m, NULL); }
 void create_semaphore(SemaphoreType *s, int init_value) {
   sem_init(s, 0, init_value);
@@ -33,6 +35,17 @@ void mutex_unlock(MutexType *m) { pthread_mutex_unlock(m); }
 void thread_create(ThreadType *t, void *(*thread_proc)(void *)) {
   pthread_create(t, NULL, thread_proc, NULL);
 }
+
+typedef enum TimestampResetSM {
+  TR_NONE =
+      0, // To reset timestamp we need cooperation between several functions
+  // It begins with seek_to_frame issuing command to begin the process.
+  TR_BEGIN, // Then, process_audio_frame captures earliest timestamp from the
+            // current frame
+  TR_TIMESTAMP_CAPTURED, // Finally, pull_audio sets the timestamp to the
+                         // captured one.
+  TR_FINISHED,
+} TimestampResetSM;
 
 struct DecoderPrivate {
   int video_stream;
@@ -56,7 +69,11 @@ struct DecoderPrivate {
   size_t audio_buffer_size;
   // int i;
   bool audio_configured;
+  TimestampResetSM timestamp_reset_sm;
+  AVRational new_timestamp;
   // bool eof_encountered;
+
+  LinkedQueue *command_queue;
 
   MutexType image_buffer_mtx;
   MutexType audio_buffer_mtx;
@@ -94,12 +111,31 @@ void switch_dec_state(DecoderContext *ctx, DecoderState newState) {
   ctx->state = newState;
 }
 
-struct SeekCommand {
-  float target;
-  bool active;
+struct DecoderCommand {
+  int (*dispatch)(DecoderContext *, struct DecoderCommand *);
+  void (*free_me)(struct DecoderCommand *);
 };
 
-struct SeekCommand seek_command;
+struct SeekCommand {
+  struct DecoderCommand cmd;
+  double target;
+};
+
+int seek_command_dispatch(DecoderContext *ctx, struct DecoderCommand *cmd) {
+  struct SeekCommand *c = (struct SeekCommand *)cmd;
+  return seek_to_frame(ctx, c->target);
+}
+
+void free_seek_command(struct DecoderCommand *cmd) { free(cmd); }
+
+struct SeekCommand *make_seek_command(double target) {
+  struct SeekCommand *result = malloc(sizeof(struct SeekCommand));
+  result->target = target;
+  result->cmd.dispatch = &seek_command_dispatch;
+  result->cmd.free_me = &free_seek_command;
+  return result;
+}
+
 static DecoderContext *dc;
 ThreadType decoder_thread;
 
@@ -137,6 +173,10 @@ int dec_init_decoder(DecoderContext *ctx) {
 
   ctx->vbuffer_timeline = make_timeline(sizeof(unsigned int), 120);
   ctx->abuffer_timeline = make_timeline(sizeof(unsigned int), 120);
+
+  ctx->video_timest = 0;
+
+  p->command_queue = make_queue();
 
   dc = ctx;
   // dc->state = DS_READY;
@@ -410,6 +450,12 @@ static int process_audio_frame(DecoderContext *ctx) {
     return RESULT_STALL;
   }
 
+  if (p->timestamp_reset_sm == TR_BEGIN) {
+    // Get new timestamp from the audio frame
+    p->new_timestamp =
+        av_mul_q((AVRational){p->fr->best_effort_timestamp, 1}, ctx->audio_tb);
+    p->timestamp_reset_sm = TR_TIMESTAMP_CAPTURED;
+  }
   p->fr_audio_populated = false;
   mutex_unlock(&p->audio_buffer_mtx);
 cleanup:
@@ -537,20 +583,33 @@ int dec_pull_audio(DecoderContext *ctx, void *audio_buffer, unsigned int frames,
   ctx->abytes_pulled += result;
   try_unlock_decoder_sem(ctx);
   const int bytes_per_frame = sizeof(float) * 2;
-  *ts = av_add_q(*ts, av_make_q(result / bytes_per_frame, ctx->sample_rate));
+  if (p->timestamp_reset_sm == TR_TIMESTAMP_CAPTURED) {
+    *ts = p->new_timestamp;
+    p->timestamp_reset_sm = TR_FINISHED;
+  } else {
+    *ts = av_add_q(*ts, av_make_q(result / bytes_per_frame, ctx->sample_rate));
+  }
+  if (result == 0) {
+    try_move_to_finished_state(ctx);
+  }
   mutex_unlock(&p->audio_buffer_mtx);
   return result;
 }
 
-void dec_seek_to_frame(DecoderContext *ctx, double ts) {
+int seek_to_frame(DecoderContext *ctx, double ts) {
   int64_t time = floor(ts * ctx->video_tb.den / ctx->video_tb.num);
   struct DecoderPrivate *p = ctx->p;
   mutex_lock(&p->audio_buffer_mtx);
   mutex_lock(&p->image_buffer_mtx);
-  printf("seeking to %ld\n", time);
-  int result = avformat_seek_file(p->fmt_ctx, p->video_stream, 0, time,
-                                  INT64_MAX, AVSEEK_FLAG_ANY);
-  printf("Seek file returns %d\n", result);
+  TraceLog(LOG_DEBUG, "seeking to %ld", time);
+  int result =
+      avformat_seek_file(p->fmt_ctx, p->video_stream, 0, time, INT64_MAX, 0);
+  TraceLog(LOG_DEBUG, "Seek file returns %d", result);
+  if (result != 0) {
+    mutex_unlock(&p->image_buffer_mtx);
+    mutex_unlock(&p->audio_buffer_mtx);
+    return result;
+  }
   avcodec_flush_buffers(p->ctxv);
   avcodec_flush_buffers(p->ctxa);
   if (ctx->state != DS_STARTUP) {
@@ -563,8 +622,11 @@ void dec_seek_to_frame(DecoderContext *ctx, double ts) {
   }
   ringbuffer_flush(&p->audio_buffer);
   ringbuffer_flush(&p->image_buffer);
+  p->timestamp_reset_sm = TR_BEGIN;
+  p->new_timestamp = (AVRational){0, 1};
   p->fr_audio_populated = false;
   p->fr_populated = false;
+  ctx->video_timest = 0;
   if (p->pkt_populated) {
     p->pkt_populated = false;
     av_packet_unref(p->pkt);
@@ -572,6 +634,18 @@ void dec_seek_to_frame(DecoderContext *ctx, double ts) {
   try_unlock_decoder_sem(ctx);
   mutex_unlock(&p->image_buffer_mtx);
   mutex_unlock(&p->audio_buffer_mtx);
+  return RESULT_OK;
+}
+
+void dec_seek_to_frame(DecoderContext *ctx, double ts) {
+  struct DecoderPrivate *p = ctx->p;
+  mutex_lock(&p->command_q_mtx);
+
+  struct SeekCommand *cmd = make_seek_command(ts);
+  TraceLog(LOG_DEBUG, "Command added");
+  p->command_queue = queue_add(p->command_queue, cmd);
+
+  mutex_unlock(&p->command_q_mtx);
 }
 
 void *decode_thread(void *_) {
@@ -584,10 +658,13 @@ void *decode_thread(void *_) {
   do {
     switch (dc->state) {
     case DS_PLAYING:
-      if (seek_command.active) {
-        printf("seeking command received, seek to %ld\n", seek_command.target);
-        // seek_to_frame(dc, seek_command.target);
-        seek_command.active = false;
+      mutex_lock(&dc->p->command_q_mtx);
+      struct DecoderCommand *cmd = queue_pop(&dc->p->command_queue);
+      mutex_unlock(&dc->p->command_q_mtx);
+      if (cmd) {
+        TraceLog(LOG_DEBUG, "Command received");
+        cmd->dispatch(dc, cmd);
+        cmd->free_me(cmd);
       }
       // FALLTHROUGH
     case DS_STARTUP:
@@ -625,6 +702,11 @@ bool dec_is_decoder_finished(DecoderContext *ctx) {
 void free_decoder_context(DecoderContext *ctx) {
   assert(dc == ctx || dc == NULL);
   struct DecoderPrivate *p = ctx->p;
+
+  if (p->command_queue) {
+    queue_free(p->command_queue);
+    p->command_queue = NULL;
+  }
 
   free_semaphore(&p->sem);
   // free_semaphore(&p->startup_sem);
@@ -780,17 +862,22 @@ int dec_init_graphics_objects(DecoderContext *ctx, RaylibObjects *objs) {
   objs->u_location = GetShaderLocation(objs->video_shader, "tex_u");
   objs->v_location = GetShaderLocation(objs->video_shader, "tex_v");
 
-  objs->video_timest = 0;
-
   return RESULT_OK;
 }
 
 int dec_update_textures(DecoderContext *ctx, RaylibObjects *objs, float ts) {
-  if (objs->video_timest < ts) {
+  // If the TimestampResetSM is active, the ts is probably not reliable
+  struct DecoderPrivate *p = ctx->p;
+  if (p->timestamp_reset_sm != TR_NONE &&
+      p->timestamp_reset_sm != TR_FINISHED) {
+    // So we can just return prematurely, no updates needed
+    return RESULT_OK;
+  }
+  if (ctx->video_timest < ts) {
     uint8_t *image_buff = NULL;
-    while (objs->video_timest < ts) {
+    while (ctx->video_timest < ts) {
       uint8_t *prev_image = image_buff;
-      image_buff = dec_pull_image(ctx, &objs->video_timest);
+      image_buff = dec_pull_image(ctx, &ctx->video_timest);
       if (image_buff == NULL) {
         // If we ran out of frames, just show the last one no matter the
         // timestamp.
@@ -800,7 +887,7 @@ int dec_update_textures(DecoderContext *ctx, RaylibObjects *objs, float ts) {
       objs->frame_counter++;
       // If we are going for the next iteration, have to make sure to
       // release_image.
-      if (objs->video_timest < ts) {
+      if (ctx->video_timest < ts) {
         dec_release_image(ctx);
       }
     }
@@ -885,8 +972,8 @@ void dec_draw_debug_overlay(DecoderContext *ctx, RaylibObjects *objs,
   timeline_draw_ui(ctx->vbuffer_timeline, x, y + 100, 300, 80, 100);
   char msg[128];
   snprintf(msg, sizeof(msg), "atime: %.2f vtime: %.2f d: %.2f f: %d",
-           audio_ts_double, objs->video_timest,
-           fabs(audio_ts_double - objs->video_timest), objs->frame_counter);
+           audio_ts_double, ctx->video_timest,
+           fabs(audio_ts_double - ctx->video_timest), objs->frame_counter);
 
   DrawText(msg, x, y + 200, 20, WHITE);
   snprintf(msg, sizeof(msg), "abytes: %ld written: %ld", ctx->abytes_pulled,

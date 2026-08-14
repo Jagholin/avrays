@@ -77,6 +77,7 @@ int main(int argc, char **argv) {
   if (scale_factor_h < scale_factor)
     scale_factor = scale_factor_h;
 
+  SetTraceLogLevel(LOG_DEBUG);
   InitWindow(scaled_width, scaled_height, file_name);
   SetWindowState(FLAG_WINDOW_ALWAYS_RUN);
   InitAudioDevice();
@@ -118,11 +119,17 @@ int main(int argc, char **argv) {
         stream_paused = true;
       }
     }
+    if (IsKeyPressed(KEY_D)) {
+      dec_seek_to_frame(&dc, video_timest + 10.0);
+    }
+    if (IsKeyPressed(KEY_A)) {
+      dec_seek_to_frame(&dc, video_timest - 10.0);
+    }
     ClearBackground(BLACK);
 
     double audio_ts_double = av_q2d(audio_timest);
     dec_update_textures(&dc, &video_tex, audio_ts_double);
-    video_timest = video_tex.video_timest;
+    video_timest = dc.video_timest;
 
     BeginDrawing();
     // printf("delta: %f, max delta: %f, min delta: %f\n", dc.delta_time,
