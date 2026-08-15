@@ -120,9 +120,15 @@ void switch_dec_state(DecoderContext *ctx, DecoderState newState) {
   ctx->state = newState;
 }
 
+typedef enum {
+  COMMAND_SEEK = 1,
+} CommandType;
+
 struct DecoderCommand {
   int (*dispatch)(DecoderContext *, struct DecoderCommand *);
   void (*free_me)(struct DecoderCommand *);
+  CommandType c_type;
+  size_t struct_size;
 };
 
 struct SeekCommand {
@@ -140,9 +146,30 @@ void free_seek_command(struct DecoderCommand *cmd) { free(cmd); }
 struct SeekCommand *make_seek_command(double target) {
   struct SeekCommand *result = malloc(sizeof(struct SeekCommand));
   result->target = target;
+  result->cmd.c_type = COMMAND_SEEK;
   result->cmd.dispatch = &seek_command_dispatch;
   result->cmd.free_me = &free_seek_command;
+  result->cmd.struct_size = sizeof(struct SeekCommand);
   return result;
+}
+
+void add_command_to_q(LinkedQueue **q, struct DecoderCommand **cmd,
+                      bool collapse) {
+  if (collapse) {
+    LinkedQueue *mq = *q;
+    while (mq->pnext) {
+      struct DecoderCommand *d = (struct DecoderCommand *)mq->data;
+      if (d->c_type == (*cmd)->c_type) {
+        // just copy command on top of the previous one and delete unneeded
+        // copy.
+        memcpy(d, *cmd, (*cmd)->struct_size);
+        (*cmd)->free_me(*cmd);
+        *cmd = NULL;
+        return;
+      }
+    }
+  }
+  *q = queue_add(*q, *cmd);
 }
 
 static DecoderContext *dc;
@@ -762,7 +789,8 @@ void dec_seek_to_frame(DecoderContext *ctx, double ts) {
 
   struct SeekCommand *cmd = make_seek_command(ts);
   TraceLog(LOG_DEBUG, "Command added");
-  p->command_queue = queue_add(p->command_queue, cmd);
+  // p->command_queue = queue_add(p->command_queue, cmd);
+  add_command_to_q(&p->command_queue, (struct DecoderCommand **)&cmd, true);
 
   mutex_unlock(&p->command_q_mtx);
 }
