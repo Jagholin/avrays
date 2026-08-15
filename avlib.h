@@ -47,6 +47,7 @@ typedef struct DecoderContext {
   float min_delta_time;
 
   float video_timest;
+  double duration; // Approximate duration in seconds
 
   TimeLine vbuffer_timeline;
   TimeLine abuffer_timeline;
@@ -62,6 +63,8 @@ typedef struct DecoderContext {
 #define RESULT_OK 0
 #define RESULT_STALL 1
 #define RESULT_EOF 2
+int time_to_str(double seconds, char *buf, size_t n);
+
 int dec_init_decoder(DecoderContext *ctx);
 int dec_open_file(DecoderContext *ctx, const char *file_name);
 // int dec_continue_decoding(DecoderContext *ctx);

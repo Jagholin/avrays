@@ -10,7 +10,7 @@
 #include <unistd.h>
 
 // #include "avlib_fork.h"
-#include "avlib2.h"
+#include "avlib.h"
 #include "utils.h"
 
 const bool audio_dbg = false;
@@ -55,6 +55,7 @@ void audio_cb(void *frame_data, unsigned int frames) {
 
 int main(int argc, char **argv) {
   // tempfile = fopen("tempfile.out", "wb");
+  SetTraceLogLevel(LOG_DEBUG);
   float current_volume = 0.2;
   if (argc != 2) {
     return 1;
@@ -77,7 +78,6 @@ int main(int argc, char **argv) {
   if (scale_factor_h < scale_factor)
     scale_factor = scale_factor_h;
 
-  SetTraceLogLevel(LOG_DEBUG);
   InitWindow(scaled_width, scaled_height, file_name);
   SetWindowState(FLAG_WINDOW_ALWAYS_RUN);
   InitAudioDevice();
@@ -120,10 +120,12 @@ int main(int argc, char **argv) {
       }
     }
     if (IsKeyPressed(KEY_D)) {
-      dec_seek_to_frame(&dc, video_timest + 10.0);
+      if (video_timest != 0)
+        dec_seek_to_frame(&dc, video_timest + 10.0);
     }
     if (IsKeyPressed(KEY_A)) {
-      dec_seek_to_frame(&dc, video_timest - 10.0);
+      if (video_timest != 0)
+        dec_seek_to_frame(&dc, video_timest - 20.0);
     }
     ClearBackground(BLACK);
 

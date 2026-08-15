@@ -6,7 +6,7 @@
 #include <pthread.h>
 #include <semaphore.h>
 
-#include "avlib2.h"
+#include "avlib.h"
 #include "utils.h"
 
 // Size of the video buffer if the framerate is not available
@@ -34,6 +34,15 @@ void mutex_lock(MutexType *m) { pthread_mutex_lock(m); }
 void mutex_unlock(MutexType *m) { pthread_mutex_unlock(m); }
 void thread_create(ThreadType *t, void *(*thread_proc)(void *)) {
   pthread_create(t, NULL, thread_proc, NULL);
+}
+
+int time_to_str(double seconds, char *buf, size_t n) {
+  int sec = floor(seconds);
+  int hours = sec / 3600;
+  int mins = (sec % 3600) / 60;
+  sec = sec % 60;
+
+  return snprintf(buf, n, "%02d:%02d:%02d", hours, mins, sec);
 }
 
 typedef enum TimestampResetSM {
@@ -187,6 +196,60 @@ cleanup:
   return RESULT_ERROR;
 }
 
+int time_probe_seek_pts(DecoderContext *ctx, int64_t *presult) {
+  struct DecoderPrivate *p = ctx->p;
+
+  int64_t timed = AV_TIME_BASE;
+  // 1. Seek to the end of the file as much as we reasonably can
+  int tres = avformat_seek_file(p->fmt_ctx, -1, 0, INT64_MAX, INT64_MAX, 0);
+  TraceLog(LOG_DEBUG, "VADECODER: time_probe_seek_pts(): Timeprobe returned %d",
+           tres);
+  int result = RESULT_ERROR;
+  if (tres != 0) {
+    // Seeking failed, try to recover
+    goto cleanup;
+  }
+  AVPacket *test_p = av_packet_alloc();
+  int res = 0;
+  int64_t max_pts = 0;
+  while (true) {
+    // 2. Read incoming frames until we can't anymore
+    res = av_read_frame(p->fmt_ctx, test_p);
+    if (res < 0) {
+      // 2a. In which case, continue with 3.
+      av_packet_unref(test_p);
+      break;
+    }
+    if (test_p->stream_index == p->video_stream) {
+      if (test_p->pts == AV_NOPTS_VALUE) {
+        // No PTS values present, shortcut to the end
+        result = RESULT_ERROR;
+        av_packet_unref(test_p);
+        goto cleanup;
+      }
+      if (test_p->pts > max_pts) {
+        // 2b. Find maximum PTS in the packets received
+        max_pts = test_p->pts;
+        result = RESULT_OK;
+      }
+    }
+    av_packet_unref(test_p);
+  }
+
+  // 3. Return timestamp if successful, then cleanup.
+  if (result == RESULT_OK) {
+    *presult = max_pts;
+  }
+cleanup:
+  tres = avformat_seek_file(p->fmt_ctx, -1, 0, 0, timed, 0);
+  TraceLog(LOG_DEBUG, "Seek back %d", tres);
+  // We might not be precisely at 00:00, so receive current timestamp from
+  // streams.
+  p->timestamp_reset_sm = TR_BEGIN;
+  av_packet_free(&test_p);
+  return result;
+}
+
 int dec_open_file(DecoderContext *ctx, const char *file_name) {
   assert(ctx->state == DS_READY);
   struct DecoderPrivate *p = ctx->p;
@@ -207,18 +270,51 @@ int dec_open_file(DecoderContext *ctx, const char *file_name) {
   AVCodecParameters *origin_par_audio =
       p->fmt_ctx->streams[p->audio_stream]->codecpar;
 
-  printf("Audio sample rate: %d, bits per sample: %d, channels: %d, frame "
-         "size: %d\n",
-         origin_par_audio->sample_rate, origin_par_audio->bits_per_coded_sample,
-         origin_par_audio->ch_layout.nb_channels, origin_par_audio->frame_size);
-  printf("Video frame rate: %d/%d\n", origin_par->framerate.num,
-         origin_par->framerate.den);
+  TraceLog(
+      LOG_DEBUG,
+      "Audio sample rate: %d, bits per sample: %d, channels: %d, frame "
+      "size: %d",
+      origin_par_audio->sample_rate, origin_par_audio->bits_per_coded_sample,
+      origin_par_audio->ch_layout.nb_channels, origin_par_audio->frame_size);
+  TraceLog(LOG_DEBUG, "Video frame rate: %d/%d", origin_par->framerate.num,
+           origin_par->framerate.den);
 
   const AVCodec *codec = avcodec_find_decoder(origin_par->codec_id);
   ERRCHECK2(codec, "Can't find decoder");
   const AVCodec *audio_codec = avcodec_find_decoder(origin_par_audio->codec_id);
-  printf("Video decoded with %s, audio with %s\n", codec->name,
-         audio_codec->name);
+  TraceLog(LOG_INFO, "VADECODER: Video decoded with %s, audio with %s",
+           codec->name, audio_codec->name);
+  const char *duration_method;
+  switch (p->fmt_ctx->duration_estimation_method) {
+  case AVFMT_DURATION_FROM_PTS: ///< Duration accurately estimated from PTSes
+    duration_method = "PTS";
+    break;
+  case AVFMT_DURATION_FROM_STREAM: ///< Duration estimated from a stream with a
+                                   ///< known duration
+    duration_method = "STREAM";
+    break;
+  case AVFMT_DURATION_FROM_BITRATE: ///< Duration estimated from bitrate (less
+                                    ///< accurate)
+    duration_method = "BITRATE";
+    break;
+  }
+  double dur_est = (double)p->fmt_ctx->duration / AV_TIME_BASE;
+
+  char msg[128];
+  time_to_str(dur_est, msg, 128);
+  TraceLog(LOG_INFO, "Estimated duration %lf sec(%s) from %s", dur_est, msg,
+           duration_method);
+
+  if (p->fmt_ctx->duration_estimation_method == AVFMT_DURATION_FROM_BITRATE) {
+    // Duration might not be accurate, estimate it with other methods instead
+    int64_t pts;
+    AVRational vid_tb = p->fmt_ctx->streams[p->video_stream]->time_base;
+    result = time_probe_seek_pts(ctx, &pts);
+    if (result == RESULT_OK) {
+      dur_est = av_q2d(av_mul_q((AVRational){pts, 1}, vid_tb));
+    }
+  }
+  ctx->duration = dur_est;
 
   p->ctxv = avcodec_alloc_context3(codec);
   ERRCHECK2(p->ctxv, "Cant allocate memory for decoder context");
@@ -238,8 +334,8 @@ int dec_open_file(DecoderContext *ctx, const char *file_name) {
   ERRCHECK("Cant open audio decoder");
 
   const AVPixFmtDescriptor *pix_desc = av_pix_fmt_desc_get(p->ctxv->pix_fmt);
-  printf("Frame is %dx%d (%s)\n", p->ctxv->width, p->ctxv->height,
-         pix_desc->name);
+  TraceLog(LOG_INFO, "Frame is %dx%d (%s)", p->ctxv->width, p->ctxv->height,
+           pix_desc->name);
   ctx->video_width = p->ctxv->width;
   ctx->video_height = p->ctxv->height;
 
@@ -256,23 +352,25 @@ int dec_open_file(DecoderContext *ctx, const char *file_name) {
 
   p->image_buffer = make_ringbuffer(p->image_buffer_size * buffer_frames);
 
-  printf("Audio codec data: sample format %s, sample rate %d, bytes per sample "
-         "%d\n",
-         av_get_sample_fmt_name(p->ctxa->sample_fmt), p->ctxa->sample_rate,
-         av_get_bytes_per_sample(p->ctxa->sample_fmt));
+  TraceLog(
+      LOG_DEBUG,
+      "Audio codec data: sample format %s, sample rate %d, bytes per sample "
+      "%d",
+      av_get_sample_fmt_name(p->ctxa->sample_fmt), p->ctxa->sample_rate,
+      av_get_bytes_per_sample(p->ctxa->sample_fmt));
   ctx->sample_rate = p->ctxa->sample_rate;
 
-  printf("video Time base is %d/%d\n",
-         p->fmt_ctx->streams[p->video_stream]->time_base.num,
-         p->fmt_ctx->streams[p->video_stream]->time_base.den);
-  printf("audio Time base is %d/%d\n",
-         p->fmt_ctx->streams[p->audio_stream]->time_base.num,
-         p->fmt_ctx->streams[p->audio_stream]->time_base.den);
+  TraceLog(LOG_DEBUG, "video Time base is %d/%d",
+           p->fmt_ctx->streams[p->video_stream]->time_base.num,
+           p->fmt_ctx->streams[p->video_stream]->time_base.den);
+  TraceLog(LOG_DEBUG, "audio Time base is %d/%d",
+           p->fmt_ctx->streams[p->audio_stream]->time_base.num,
+           p->fmt_ctx->streams[p->audio_stream]->time_base.den);
   ctx->video_tb = p->fmt_ctx->streams[p->video_stream]->time_base;
   ctx->audio_tb = p->fmt_ctx->streams[p->audio_stream]->time_base;
 
-  printf("Codec framerate: %d/%d\n", p->ctxv->framerate.num,
-         p->ctxv->framerate.den);
+  TraceLog(LOG_DEBUG, "Codec framerate: %d/%d", p->ctxv->framerate.num,
+           p->ctxv->framerate.den);
   ctx->video_framerate = p->ctxv->framerate;
   ctx->pixel_format = origin_par->format;
 
@@ -597,14 +695,35 @@ int dec_pull_audio(DecoderContext *ctx, void *audio_buffer, unsigned int frames,
 }
 
 int seek_to_frame(DecoderContext *ctx, double ts) {
-  int64_t time = floor(ts * ctx->video_tb.den / ctx->video_tb.num);
+  int64_t time = floor(ts * AV_TIME_BASE);
+  int64_t time_dt = AV_TIME_BASE;
+
   struct DecoderPrivate *p = ctx->p;
   mutex_lock(&p->audio_buffer_mtx);
   mutex_lock(&p->image_buffer_mtx);
   TraceLog(LOG_DEBUG, "seeking to %ld", time);
-  int result =
-      avformat_seek_file(p->fmt_ctx, p->video_stream, 0, time, INT64_MAX, 0);
-  TraceLog(LOG_DEBUG, "Seek file returns %d", result);
+  int result = avformat_seek_file(p->fmt_ctx, -1, time - time_dt, time,
+                                  time + time_dt, 0);
+  TraceLog(LOG_DEBUG, "Seek file (+-1) returns %d", result);
+  if (result != 0) {
+    result = avformat_seek_file(p->fmt_ctx, -1, time - 5 * time_dt, time,
+                                time + 5 * time_dt, 0);
+    TraceLog(LOG_DEBUG, "Seek file (+-5) returns %d", result);
+  }
+  if (result != 0) {
+    result = avformat_seek_file(p->fmt_ctx, -1, time - 10 * time_dt, time,
+                                time + 10 * time_dt, 0);
+    TraceLog(LOG_DEBUG, "Seek file (+-10) returns %d", result);
+  }
+  if (result != 0) {
+    result = avformat_seek_file(p->fmt_ctx, -1, time - 20 * time_dt, time,
+                                time + 20 * time_dt, 0);
+    TraceLog(LOG_DEBUG, "Seek file (+-20) returns %d", result);
+  }
+  if (result != 0) {
+    result = avformat_seek_file(p->fmt_ctx, -1, 0, time, INT64_MAX, 0);
+    TraceLog(LOG_DEBUG, "Seek file (+-INF) returns %d", result);
+  }
   if (result != 0) {
     mutex_unlock(&p->image_buffer_mtx);
     mutex_unlock(&p->audio_buffer_mtx);
@@ -968,25 +1087,37 @@ void timeline_draw_ui(TimeLine tl, int x, int y, int width, int height,
 void dec_draw_debug_overlay(DecoderContext *ctx, RaylibObjects *objs,
                             double audio_ts_double, int x, int y) {
   struct DecoderPrivate *p = ctx->p;
+  const unsigned int LINEHEIGHT = 25;
+  const unsigned int FONTSIZE = 20;
   timeline_draw_ui(ctx->abuffer_timeline, x, y, 300, 80, 100);
-  timeline_draw_ui(ctx->vbuffer_timeline, x, y + 100, 300, 80, 100);
-  char msg[128];
+  y += 100;
+  timeline_draw_ui(ctx->vbuffer_timeline, x, y, 300, 80, 100);
+  y += 100;
+  char msg[128], msga[128];
   snprintf(msg, sizeof(msg), "atime: %.2f vtime: %.2f d: %.2f f: %d",
            audio_ts_double, ctx->video_timest,
            fabs(audio_ts_double - ctx->video_timest), objs->frame_counter);
 
-  DrawText(msg, x, y + 200, 20, WHITE);
+  DrawText(msg, x, y, FONTSIZE, WHITE);
+  y += LINEHEIGHT;
   snprintf(msg, sizeof(msg), "abytes: %ld written: %ld", ctx->abytes_pulled,
            ctx->abytes_written);
-  DrawText(msg, x, y + 225, 20, WHITE);
+  DrawText(msg, x, y, FONTSIZE, WHITE);
+  y += LINEHEIGHT;
   snprintf(msg, sizeof(msg), "vbytes: %ld, written: %ld", ctx->vbytes_pulled,
            ctx->vbytes_written);
-  DrawText(msg, x, y + 250, 20, WHITE);
+  DrawText(msg, x, y, FONTSIZE, WHITE);
+  y += LINEHEIGHT;
 
   if (p) {
     snprintf(msg, sizeof(msg), "abuffer: %zu vbuffer: %zu",
              ringbuffer_len(&p->audio_buffer),
              ringbuffer_len(&p->image_buffer));
-    DrawText(msg, x, y + 275, 20, WHITE);
+    DrawText(msg, x, y, FONTSIZE, WHITE);
+    y += LINEHEIGHT;
   }
+  time_to_str(ctx->duration, msga, sizeof(msga));
+  snprintf(msg, sizeof(msg), "Duration: %s", msga);
+  DrawText(msg, x, y, FONTSIZE, WHITE);
+  y += LINEHEIGHT;
 }
