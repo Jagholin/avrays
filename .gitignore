@@ -1,12 +1,4 @@
 *.mkv
 *.webm
 *.mp4
-output.txt
-output
-player
-audio_pure
-player2
-a.out
-outerr.txt
-input_file
-out.txt
+player*
