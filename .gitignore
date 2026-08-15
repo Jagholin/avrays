@@ -2,3 +2,4 @@
 *.webm
 *.mp4
 player*
+build/
