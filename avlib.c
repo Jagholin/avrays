@@ -1084,28 +1084,42 @@ void timeline_draw_ui(TimeLine tl, int x, int y, int width, int height,
   free(line_points);
 }
 
-void dec_draw_debug_overlay(DecoderContext *ctx, RaylibObjects *objs,
-                            double audio_ts_double, int x, int y) {
+Vector2 dec_draw_debug_overlay(DecoderContext *ctx, RaylibObjects *objs,
+                               double audio_ts_double, int x, int y) {
   struct DecoderPrivate *p = ctx->p;
   const unsigned int LINEHEIGHT = 25;
   const unsigned int FONTSIZE = 20;
+  Vector2 dims = {};
+  int start_y = y;
+  int text_width = 0;
   timeline_draw_ui(ctx->abuffer_timeline, x, y, 300, 80, 100);
   y += 100;
   timeline_draw_ui(ctx->vbuffer_timeline, x, y, 300, 80, 100);
   y += 100;
+  dims.x = 300;
+
   char msg[128], msga[128];
   snprintf(msg, sizeof(msg), "atime: %.2f vtime: %.2f d: %.2f f: %d",
            audio_ts_double, ctx->video_timest,
            fabs(audio_ts_double - ctx->video_timest), objs->frame_counter);
 
+  int tw = MeasureText(msg, FONTSIZE);
+  if (tw > text_width)
+    text_width = tw;
   DrawText(msg, x, y, FONTSIZE, WHITE);
   y += LINEHEIGHT;
   snprintf(msg, sizeof(msg), "abytes: %ld written: %ld", ctx->abytes_pulled,
            ctx->abytes_written);
+  tw = MeasureText(msg, FONTSIZE);
+  if (tw > text_width)
+    text_width = tw;
   DrawText(msg, x, y, FONTSIZE, WHITE);
   y += LINEHEIGHT;
   snprintf(msg, sizeof(msg), "vbytes: %ld, written: %ld", ctx->vbytes_pulled,
            ctx->vbytes_written);
+  tw = MeasureText(msg, FONTSIZE);
+  if (tw > text_width)
+    text_width = tw;
   DrawText(msg, x, y, FONTSIZE, WHITE);
   y += LINEHEIGHT;
 
@@ -1113,11 +1127,21 @@ void dec_draw_debug_overlay(DecoderContext *ctx, RaylibObjects *objs,
     snprintf(msg, sizeof(msg), "abuffer: %zu vbuffer: %zu",
              ringbuffer_len(&p->audio_buffer),
              ringbuffer_len(&p->image_buffer));
+    tw = MeasureText(msg, FONTSIZE);
+    if (tw > text_width)
+      text_width = tw;
     DrawText(msg, x, y, FONTSIZE, WHITE);
     y += LINEHEIGHT;
   }
   time_to_str(ctx->duration, msga, sizeof(msga));
   snprintf(msg, sizeof(msg), "Duration: %s", msga);
+  tw = MeasureText(msg, FONTSIZE);
+  if (tw > text_width)
+    text_width = tw;
+  if (dims.x < text_width)
+    dims.x = text_width;
   DrawText(msg, x, y, FONTSIZE, WHITE);
   y += LINEHEIGHT;
+  dims.y = y - start_y;
+  return dims;
 }

@@ -12,6 +12,8 @@
 // #include "avlib_fork.h"
 #include "avlib.h"
 #include "utils.h"
+#define RAYGUI_IMPLEMENTATION
+#include "vendor/raygui/src/raygui.h"
 
 const bool audio_dbg = false;
 
@@ -143,7 +145,8 @@ int main(int argc, char **argv) {
     if (!stream_paused)
       dec_update_timelines(&dc);
 
-    dec_draw_debug_overlay(&dc, &video_tex, audio_ts_double, 10, 50);
+    Vector2 overlay_dims =
+        dec_draw_debug_overlay(&dc, &video_tex, audio_ts_double, 10, 50);
 
     if (stream_paused) {
       DrawRectangle(scaled_width / 2 - 30, scaled_height / 2 - 50, 20, 100,
@@ -153,6 +156,23 @@ int main(int argc, char **argv) {
     }
 
     DrawFPS(10, 10);
+    float new_ts = video_timest;
+    // Get window's current dimensions
+    int render_width = GetRenderWidth();
+    int render_height = GetRenderHeight();
+
+    int status =
+        GuiSliderBar((Rectangle){20, render_height - 50, render_width - 40, 30},
+                     NULL, NULL, &new_ts, 0, dc.duration);
+    char msga[32], msgb[32], msg[128];
+    time_to_str(video_timest, msga, sizeof(msga));
+    time_to_str(dc.duration, msgb, sizeof(msgb));
+    snprintf(msg, sizeof(msg), "%s / %s", msga, msgb);
+    DrawText(msg, 20, render_height - 80, 25, WHITE);
+
+    if (status == RESULT_CHANGED) {
+      dec_seek_to_frame(&dc, new_ts);
+    }
     EndDrawing();
   }
 
