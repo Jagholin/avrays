@@ -4,8 +4,12 @@
 #include "utils.h"
 #include <libavutil/pixfmt.h>
 #include <libavutil/rational.h>
+#include <pthread.h>
 #include <raylib.h>
+#include <semaphore.h>
 #include <stdbool.h>
+
+#define AVRAT_ZERO (AVRational){0, 1};
 
 struct DecoderPrivate;
 
@@ -28,8 +32,18 @@ typedef struct RaylibObjects {
   unsigned int bytespp;
 } RaylibObjects;
 
+typedef pthread_mutex_t MutexType;
+typedef sem_t SemaphoreType;
+typedef pthread_t ThreadType;
+
+void mutex_lock(MutexType *m);
+void mutex_unlock(MutexType *m);
+
 typedef struct DecoderContext {
   struct DecoderPrivate *p;
+
+  MutexType dc_mutex; // This mutex is locked when big changes are made to the
+                      // other fields
 
   unsigned int sample_rate;
   unsigned int frame_rate;
@@ -73,7 +87,7 @@ void dec_release_image(DecoderContext *ctx);
 int dec_pull_audio(DecoderContext *ctx, void *audio_buffer, unsigned int frames,
                    volatile AVRational *ts);
 void free_decoder_context(DecoderContext *ctx);
-bool dec_is_decoder_finished(DecoderContext *ctx);
+bool dec_is_decoder_stopped(DecoderContext *ctx);
 void dec_seek_to_frame(DecoderContext *ctx, double ts);
 
 void dec_update_timelines(DecoderContext *ctx);
@@ -82,6 +96,7 @@ void dec_shutdown(DecoderContext *ctx);
 // void dec_wait_ready(DecoderContext *ctx);
 
 int dec_init_graphics_objects(DecoderContext *ctx, RaylibObjects *objs);
+int dec_free_graphics_objects(RaylibObjects *objs);
 int dec_update_textures(DecoderContext *ctx, RaylibObjects *objs, float ts);
 int dec_draw_video_textures(RaylibObjects *objs, Vector2 position,
                             float rotation, float scale_factor, Color tint);

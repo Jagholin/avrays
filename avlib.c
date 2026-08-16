@@ -17,6 +17,7 @@ typedef sem_t SemaphoreType;
 typedef pthread_t ThreadType;
 
 int seek_to_frame(DecoderContext *ctx, double ts);
+int dec_close_file(DecoderContext *ctx, bool called_as_cleanup);
 
 void create_mutex(MutexType *m) { pthread_mutex_init(m, NULL); }
 void create_semaphore(SemaphoreType *s, int init_value) {
@@ -30,6 +31,7 @@ void free_semaphore(SemaphoreType *s) {
 
 void semaphore_wait(SemaphoreType *s) { sem_wait(s); }
 void semaphore_incr(SemaphoreType *s) { sem_post(s); }
+void semaphore_get_value(SemaphoreType *s, int *val) { sem_getvalue(s, val); }
 void mutex_lock(MutexType *m) { pthread_mutex_lock(m); }
 void mutex_unlock(MutexType *m) { pthread_mutex_unlock(m); }
 void thread_create(ThreadType *t, void *(*thread_proc)(void *)) {
@@ -122,6 +124,7 @@ void switch_dec_state(DecoderContext *ctx, DecoderState newState) {
 
 typedef enum {
   COMMAND_SEEK = 1,
+  COMMAND_CLOSE,
 } CommandType;
 
 struct DecoderCommand {
@@ -134,6 +137,10 @@ struct DecoderCommand {
 struct SeekCommand {
   struct DecoderCommand cmd;
   double target;
+};
+
+struct CloseFileCommand {
+  struct DecoderCommand cmd;
 };
 
 int seek_command_dispatch(DecoderContext *ctx, struct DecoderCommand *cmd) {
@@ -150,6 +157,21 @@ struct SeekCommand *make_seek_command(double target) {
   result->cmd.dispatch = &seek_command_dispatch;
   result->cmd.free_me = &free_seek_command;
   result->cmd.struct_size = sizeof(struct SeekCommand);
+  return result;
+}
+
+int close_command_dispatch(DecoderContext *ctx, struct DecoderCommand *_) {
+  return dec_close_file(ctx, false);
+}
+
+void free_close_command(struct DecoderCommand *cmd) { free(cmd); }
+
+struct CloseFileCommand *make_close_file_command() {
+  struct CloseFileCommand *result = malloc(sizeof(struct CloseFileCommand));
+  result->cmd.c_type = COMMAND_CLOSE;
+  result->cmd.dispatch = &close_command_dispatch;
+  result->cmd.free_me = &free_close_command;
+  result->cmd.struct_size = sizeof(struct CloseFileCommand);
   return result;
 }
 
@@ -190,6 +212,7 @@ int dec_init_decoder(DecoderContext *ctx) {
   create_mutex(&p->image_buffer_mtx);
   create_mutex(&p->audio_buffer_mtx);
   create_mutex(&p->command_q_mtx);
+  create_mutex(&ctx->dc_mutex);
   create_semaphore(&p->sem, 1);
   // create_semaphore(&p->startup_sem, 0);
 
@@ -199,11 +222,6 @@ int dec_init_decoder(DecoderContext *ctx) {
 
   p->fr = av_frame_alloc();
   ERRCHECK2(p->fr, "Cant allocate frame");
-  p->fr_audio_target = av_frame_alloc();
-  ERRCHECK2(p->fr_audio_target, "Cant allocate frame");
-  p->fr_audio_target->ch_layout = (AVChannelLayout)AV_CHANNEL_LAYOUT_STEREO;
-  p->fr_audio_target->format = AV_SAMPLE_FMT_FLT;
-
   p->pkt = av_packet_alloc();
   ERRCHECK2(p->pkt, "Cant allocate packet");
 
@@ -269,7 +287,7 @@ int time_probe_seek_pts(DecoderContext *ctx, int64_t *presult) {
   }
 cleanup:
   tres = avformat_seek_file(p->fmt_ctx, -1, 0, 0, timed, 0);
-  TraceLog(LOG_DEBUG, "Seek back %d", tres);
+  TraceLog(LOG_DEBUG, "VADECODER: Seek back %d", tres);
   // We might not be precisely at 00:00, so receive current timestamp from
   // streams.
   p->timestamp_reset_sm = TR_BEGIN;
@@ -299,12 +317,13 @@ int dec_open_file(DecoderContext *ctx, const char *file_name) {
 
   TraceLog(
       LOG_DEBUG,
-      "Audio sample rate: %d, bits per sample: %d, channels: %d, frame "
+      "VADECODER: Audio sample rate: %d, bits per sample: %d, channels: %d, "
+      "frame "
       "size: %d",
       origin_par_audio->sample_rate, origin_par_audio->bits_per_coded_sample,
       origin_par_audio->ch_layout.nb_channels, origin_par_audio->frame_size);
-  TraceLog(LOG_DEBUG, "Video frame rate: %d/%d", origin_par->framerate.num,
-           origin_par->framerate.den);
+  TraceLog(LOG_DEBUG, "VADECODER: Video frame rate: %d/%d",
+           origin_par->framerate.num, origin_par->framerate.den);
 
   const AVCodec *codec = avcodec_find_decoder(origin_par->codec_id);
   ERRCHECK2(codec, "Can't find decoder");
@@ -329,8 +348,8 @@ int dec_open_file(DecoderContext *ctx, const char *file_name) {
 
   char msg[128];
   time_to_str(dur_est, msg, 128);
-  TraceLog(LOG_INFO, "Estimated duration %lf sec(%s) from %s", dur_est, msg,
-           duration_method);
+  TraceLog(LOG_INFO, "VADECODER: Estimated duration %lf sec(%s) from %s",
+           dur_est, msg, duration_method);
 
   if (p->fmt_ctx->duration_estimation_method == AVFMT_DURATION_FROM_BITRATE) {
     // Duration might not be accurate, estimate it with other methods instead
@@ -341,6 +360,13 @@ int dec_open_file(DecoderContext *ctx, const char *file_name) {
       dur_est = av_q2d(av_mul_q((AVRational){pts, 1}, vid_tb));
     }
   }
+  p->fr_audio_target = av_frame_alloc();
+  ERRCHECK2(p->fr_audio_target, "Cant allocate frame");
+  p->fr_audio_target->ch_layout = (AVChannelLayout)AV_CHANNEL_LAYOUT_STEREO;
+  p->fr_audio_target->format = AV_SAMPLE_FMT_FLT;
+
+  mutex_lock(&ctx->dc_mutex);
+
   ctx->duration = dur_est;
 
   p->ctxv = avcodec_alloc_context3(codec);
@@ -361,8 +387,8 @@ int dec_open_file(DecoderContext *ctx, const char *file_name) {
   ERRCHECK("Cant open audio decoder");
 
   const AVPixFmtDescriptor *pix_desc = av_pix_fmt_desc_get(p->ctxv->pix_fmt);
-  TraceLog(LOG_INFO, "Frame is %dx%d (%s)", p->ctxv->width, p->ctxv->height,
-           pix_desc->name);
+  TraceLog(LOG_INFO, "VADECODER: Frame is %dx%d (%s)", p->ctxv->width,
+           p->ctxv->height, pix_desc->name);
   ctx->video_width = p->ctxv->width;
   ctx->video_height = p->ctxv->height;
 
@@ -379,34 +405,115 @@ int dec_open_file(DecoderContext *ctx, const char *file_name) {
 
   p->image_buffer = make_ringbuffer(p->image_buffer_size * buffer_frames);
 
-  TraceLog(
-      LOG_DEBUG,
-      "Audio codec data: sample format %s, sample rate %d, bytes per sample "
-      "%d",
-      av_get_sample_fmt_name(p->ctxa->sample_fmt), p->ctxa->sample_rate,
-      av_get_bytes_per_sample(p->ctxa->sample_fmt));
+  TraceLog(LOG_DEBUG,
+           "VADECODER: Audio codec data: sample format %s, sample rate %d, "
+           "bytes per sample "
+           "%d",
+           av_get_sample_fmt_name(p->ctxa->sample_fmt), p->ctxa->sample_rate,
+           av_get_bytes_per_sample(p->ctxa->sample_fmt));
   ctx->sample_rate = p->ctxa->sample_rate;
 
-  TraceLog(LOG_DEBUG, "video Time base is %d/%d",
+  TraceLog(LOG_DEBUG, "VADECODER: video Time base is %d/%d",
            p->fmt_ctx->streams[p->video_stream]->time_base.num,
            p->fmt_ctx->streams[p->video_stream]->time_base.den);
-  TraceLog(LOG_DEBUG, "audio Time base is %d/%d",
+  TraceLog(LOG_DEBUG, "VADECODER: audio Time base is %d/%d",
            p->fmt_ctx->streams[p->audio_stream]->time_base.num,
            p->fmt_ctx->streams[p->audio_stream]->time_base.den);
   ctx->video_tb = p->fmt_ctx->streams[p->video_stream]->time_base;
   ctx->audio_tb = p->fmt_ctx->streams[p->audio_stream]->time_base;
 
-  TraceLog(LOG_DEBUG, "Codec framerate: %d/%d", p->ctxv->framerate.num,
-           p->ctxv->framerate.den);
+  TraceLog(LOG_DEBUG, "VADECODER: Codec framerate: %d/%d",
+           p->ctxv->framerate.num, p->ctxv->framerate.den);
   ctx->video_framerate = p->ctxv->framerate;
   ctx->pixel_format = origin_par->format;
 
   // ctx->state = DS_STARTUP;
   switch_dec_state(ctx, DS_STARTUP);
+  mutex_unlock(&ctx->dc_mutex);
 
   return RESULT_OK;
 cleanup:
-  // TODO: cleanup
+  dec_close_file(ctx, true);
+  mutex_unlock(&ctx->dc_mutex);
+  return result;
+}
+
+int dec_close_file(DecoderContext *ctx, bool called_as_cleanup) {
+  if (ctx->state != DS_STARTUP && ctx->state != DS_PLAYING &&
+      ctx->state != DS_FINISHED && ctx->state != DS_FILEEOF &&
+      !called_as_cleanup) {
+    return RESULT_OK;
+  }
+  struct DecoderPrivate *p = ctx->p;
+  int result = RESULT_OK;
+  // If we were called for cleanup, the mutex is already locked.
+  if (!called_as_cleanup) {
+    mutex_lock(&ctx->dc_mutex);
+  }
+
+  mutex_lock(&p->audio_buffer_mtx);
+  mutex_lock(&p->image_buffer_mtx);
+
+  ctx->pixel_format = 0;
+  ctx->video_framerate = AVRAT_ZERO;
+
+  ctx->audio_tb = AVRAT_ZERO;
+  ctx->video_tb = AVRAT_ZERO;
+  ctx->sample_rate = 0;
+  ctx->audio_time = AVRAT_ZERO;
+  ctx->video_time = AVRAT_ZERO;
+  ctx->video_timest = 0;
+
+  ctx->delta_time = 0;
+  ctx->min_delta_time = INFINITY;
+  ctx->max_delta_time = -INFINITY;
+
+  ctx->abytes_pulled = ctx->vbytes_pulled = ctx->abytes_written =
+      ctx->vbytes_written = 0;
+
+  free_ringbuffer(&p->image_buffer);
+  free_ringbuffer(&p->audio_buffer);
+  p->image_buffer_size = 0;
+  p->audio_buffer_size = 0;
+
+  ctx->video_height = ctx->video_width = 0;
+
+  if (p->ctxa)
+    avcodec_free_context(&p->ctxa);
+  if (p->ctxv)
+    avcodec_free_context(&p->ctxv);
+  if (p->fr_audio_target) {
+    av_frame_free(&p->fr_audio_target);
+  }
+
+  ctx->duration = 0;
+  p->audio_stream = p->video_stream = 0;
+  if (p->fmt_ctx)
+    avformat_close_input(&p->fmt_ctx);
+
+  // Reset other things as well
+  if (p->pkt_populated) {
+    av_packet_unref(p->pkt);
+    p->pkt_populated = false;
+  }
+  p->fr_populated = p->fr_audio_populated = false;
+  p->frame_is_audio = false;
+  p->audio_configured = false;
+  p->timestamp_reset_sm = TR_NONE;
+
+  // Recreate semaphore, since we don't know its exact state
+  free_semaphore(&p->sem);
+  create_semaphore(&p->sem, 1);
+
+  switch_dec_state(ctx, DS_READY);
+
+  mutex_unlock(&p->image_buffer_mtx);
+  mutex_unlock(&p->audio_buffer_mtx);
+
+  if (!called_as_cleanup) {
+    mutex_unlock(&ctx->dc_mutex);
+  }
+
   return result;
 }
 
@@ -441,7 +548,7 @@ static int send_eof2codecs(struct DecoderPrivate *p) {
 
 static int pull_frame(struct DecoderPrivate *p) {
   if (p->fr_populated) {
-    printf("pull_frame shortcut\n");
+    TraceLog(LOG_DEBUG, "VADECODER: pull_frame shortcut\n");
     return RESULT_OK;
   }
 
@@ -518,7 +625,8 @@ static void init_audio_buffer(struct DecoderPrivate *p) {
     audio_ring_size += size_adj;
   }
   p->audio_buffer = make_ringbuffer(audio_ring_size);
-  printf("Audio buffer size is now %zu\n", p->audio_buffer.buf_size);
+  TraceLog(LOG_INFO, "VADECODER: Audio buffer size is now %zu\n",
+           p->audio_buffer.buf_size);
 }
 
 static void init_swr_ifneeded(DecoderContext *ctx) {
@@ -540,6 +648,7 @@ static void init_swr_ifneeded(DecoderContext *ctx) {
   p->fr_audio_target->sample_rate = ctx->sample_rate;
 
   int result = swr_config_frame(p->swr, p->fr_audio_target, p->fr);
+  TraceLog(LOG_DEBUG, "VADECODER: SWR (re) initialized");
   assert(result == 0);
 
   p->audio_configured = true;
@@ -552,6 +661,7 @@ static int process_audio_frame(DecoderContext *ctx) {
     init_swr_ifneeded(ctx);
     assert(p->fr_populated);
     result = swr_convert_frame(p->swr, p->fr_audio_target, p->fr);
+    assert(swr_get_delay(p->swr, ctx->sample_rate) == 0);
     ERRCHECK("Cant convert audio frame");
     p->fr_populated = false;
     p->fr_audio_populated = true;
@@ -649,7 +759,7 @@ cleanup:
 void try_unlock_decoder_sem(DecoderContext *ctx) {
   int sem_value;
   struct DecoderPrivate *p = ctx->p;
-  sem_getvalue(&p->sem, &sem_value);
+  semaphore_get_value(&p->sem, &sem_value);
   if (sem_value == 0) {
     // we can advance semaphore if both buffers are less than 80% empty
     if (ringbuffer_len(&p->image_buffer) < 0.8 * p->image_buffer.buf_size &&
@@ -672,7 +782,11 @@ uint8_t *dec_pull_image(DecoderContext *ctx, float *timestamp) {
   struct DecoderPrivate *p = ctx->p;
 
   mutex_lock(&p->image_buffer_mtx);
+  // File could have been closed before we locked the mutex, or something else
+  // might've happened
   if (ctx->state != DS_PLAYING && ctx->state != DS_FILEEOF) {
+    // Even in this case we expect dec_release_image to be called,
+    // so we don't unlock the mutex here.
     return NULL;
   }
   // printf("pull_image called\n");
@@ -699,6 +813,12 @@ int dec_pull_audio(DecoderContext *ctx, void *audio_buffer, unsigned int frames,
     return 0;
   }
   mutex_lock(&p->audio_buffer_mtx);
+  // File could've been closed while we were waiting for mutex to release.
+  // So we have to check the state again.
+  if (ctx->state != DS_PLAYING && ctx->state != DS_FILEEOF) {
+    mutex_unlock(&p->audio_buffer_mtx);
+    return 0;
+  }
   if (!p->audio_configured) {
     mutex_unlock(&p->audio_buffer_mtx);
     return 0;
@@ -728,28 +848,28 @@ int seek_to_frame(DecoderContext *ctx, double ts) {
   struct DecoderPrivate *p = ctx->p;
   mutex_lock(&p->audio_buffer_mtx);
   mutex_lock(&p->image_buffer_mtx);
-  TraceLog(LOG_DEBUG, "seeking to %ld", time);
+  TraceLog(LOG_DEBUG, "VADECODER: seeking to %ld", time);
   int result = avformat_seek_file(p->fmt_ctx, -1, time - time_dt, time,
                                   time + time_dt, 0);
-  TraceLog(LOG_DEBUG, "Seek file (+-1) returns %d", result);
+  TraceLog(LOG_DEBUG, "VADECODER: Seek file (+-1) returns %d", result);
   if (result != 0) {
     result = avformat_seek_file(p->fmt_ctx, -1, time - 5 * time_dt, time,
                                 time + 5 * time_dt, 0);
-    TraceLog(LOG_DEBUG, "Seek file (+-5) returns %d", result);
+    TraceLog(LOG_DEBUG, "VADECODER: Seek file (+-5) returns %d", result);
   }
   if (result != 0) {
     result = avformat_seek_file(p->fmt_ctx, -1, time - 10 * time_dt, time,
                                 time + 10 * time_dt, 0);
-    TraceLog(LOG_DEBUG, "Seek file (+-10) returns %d", result);
+    TraceLog(LOG_DEBUG, "VADECODER: Seek file (+-10) returns %d", result);
   }
   if (result != 0) {
     result = avformat_seek_file(p->fmt_ctx, -1, time - 20 * time_dt, time,
                                 time + 20 * time_dt, 0);
-    TraceLog(LOG_DEBUG, "Seek file (+-20) returns %d", result);
+    TraceLog(LOG_DEBUG, "VADECODER: Seek file (+-20) returns %d", result);
   }
   if (result != 0) {
     result = avformat_seek_file(p->fmt_ctx, -1, 0, time, INT64_MAX, 0);
-    TraceLog(LOG_DEBUG, "Seek file (+-INF) returns %d", result);
+    TraceLog(LOG_DEBUG, "VADECODER: Seek file (+-INF) returns %d", result);
   }
   if (result != 0) {
     mutex_unlock(&p->image_buffer_mtx);
@@ -788,7 +908,7 @@ void dec_seek_to_frame(DecoderContext *ctx, double ts) {
   mutex_lock(&p->command_q_mtx);
 
   struct SeekCommand *cmd = make_seek_command(ts);
-  TraceLog(LOG_DEBUG, "Command added");
+  TraceLog(LOG_DEBUG, "VADECODER: Command added");
   // p->command_queue = queue_add(p->command_queue, cmd);
   add_command_to_q(&p->command_queue, (struct DecoderCommand **)&cmd, true);
 
@@ -809,7 +929,7 @@ void *decode_thread(void *_) {
       struct DecoderCommand *cmd = queue_pop(&dc->p->command_queue);
       mutex_unlock(&dc->p->command_q_mtx);
       if (cmd) {
-        TraceLog(LOG_DEBUG, "Command received");
+        TraceLog(LOG_DEBUG, "VADECODER: Command received");
         cmd->dispatch(dc, cmd);
         cmd->free_me(cmd);
       }
@@ -832,6 +952,10 @@ void *decode_thread(void *_) {
       }
       // exit(EXIT_FAILURE);
       break;
+    case DS_FINISHED:
+      // Close the file and return to the READY state
+      dec_close_file(dc, false);
+      break;
     default:
       usleep(1000);
       break;
@@ -841,8 +965,8 @@ void *decode_thread(void *_) {
   return (void *)result;
 }
 
-bool dec_is_decoder_finished(DecoderContext *ctx) {
-  return ctx->state == DS_SHUTDOWN || ctx->state == DS_FINISHED ||
+bool dec_is_decoder_stopped(DecoderContext *ctx) {
+  return ctx->state == DS_SHUTDOWN /* || ctx->state == DS_FINISHED*/ ||
          ctx->state == DS_ERROR;
 }
 
@@ -860,6 +984,7 @@ void free_decoder_context(DecoderContext *ctx) {
   free_mutex(&p->command_q_mtx);
   free_mutex(&p->audio_buffer_mtx);
   free_mutex(&p->image_buffer_mtx);
+  free_mutex(&ctx->dc_mutex);
   free_ringbuffer(&p->image_buffer);
   free_ringbuffer(&p->audio_buffer);
   if (p->pkt) {
@@ -985,7 +1110,8 @@ int dec_init_graphics_objects(DecoderContext *ctx, RaylibObjects *objs) {
     shader_code = fs_yuv420p10;
     break;
   default:
-    printf("Dont recognize pix fmt %d\n", ctx->pixel_format);
+    TraceLog(LOG_ERROR, "VADECODER: Dont recognize pix fmt %d\n",
+             ctx->pixel_format);
     return RESULT_ERROR;
   }
 
@@ -1009,6 +1135,14 @@ int dec_init_graphics_objects(DecoderContext *ctx, RaylibObjects *objs) {
   objs->u_location = GetShaderLocation(objs->video_shader, "tex_u");
   objs->v_location = GetShaderLocation(objs->video_shader, "tex_v");
 
+  return RESULT_OK;
+}
+
+int dec_free_graphics_objects(RaylibObjects *objs) {
+  UnloadShader(objs->video_shader);
+  UnloadTexture(objs->tex_luma);
+  UnloadTexture(objs->tex_u);
+  UnloadTexture(objs->tex_v);
   return RESULT_OK;
 }
 

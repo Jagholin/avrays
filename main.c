@@ -92,7 +92,7 @@ void audio_cb(void *frame_data, unsigned int frames) {
   // printf("pull audio returned %d\n", size);
   static bool info_given = false;
   if (!info_given) {
-    TraceLog(LOG_INFO, "sample rate: %d", dc.sample_rate);
+    TraceLog(LOG_INFO, "VADECODER: sample rate: %d", dc.sample_rate);
     info_given = true;
   }
   // audio_timest += (float)frames / dc.sample_rate;
@@ -106,27 +106,7 @@ void audio_cb(void *frame_data, unsigned int frames) {
     max_cb_timing = cb_timing;
 }
 
-int main(int argc, char **argv) {
-  // tempfile = fopen("tempfile.out", "wb");
-  open_log();
-  atexit(&close_log);
-
-  SetTraceLogLevel(LOG_DEBUG);
-  SetTraceLogCallback(tracelog_cb);
-  float current_volume = 0.2;
-  if (argc != 2) {
-    return 1;
-  }
-
-  char *file_name = argv[1];
-  dec_initialize();
-  int result = dec_init_decoder(&dc);
-  if (result != 0)
-    exit(EXIT_FAILURE);
-  result = dec_open_file(&dc, file_name);
-  if (result != 0)
-    exit(EXIT_FAILURE);
-
+void rescale_window(float *sf, int *sw, int *sh) {
   unsigned int scaled_width = Clamp(dc.video_width, 100, 2000);
   unsigned int scaled_height = Clamp(dc.video_height, 100, 1200);
   float scale_factor_w = (float)scaled_width / dc.video_width;
@@ -135,7 +115,42 @@ int main(int argc, char **argv) {
   if (scale_factor_h < scale_factor)
     scale_factor = scale_factor_h;
 
-  InitWindow(scaled_width, scaled_height, file_name);
+  if (sf)
+    *sf = scale_factor;
+  if (sw)
+    *sw = scaled_width;
+  if (sh)
+    *sh = scaled_height;
+
+  SetWindowSize(scaled_width, scaled_height);
+}
+
+int main(int argc, char **argv) {
+  // tempfile = fopen("tempfile.out", "wb");
+  open_log();
+  atexit(&close_log);
+
+  SetTraceLogLevel(LOG_DEBUG);
+  SetTraceLogCallback(tracelog_cb);
+  float current_volume = 0.2;
+  if (argc < 2) {
+    return 1;
+  }
+  dec_initialize();
+  int result = dec_init_decoder(&dc);
+  if (result != 0)
+    exit(EXIT_FAILURE);
+
+  unsigned int file_index = 1;
+  char *file_name = argv[file_index];
+  result = dec_open_file(&dc, file_name);
+  if (result != 0)
+    exit(EXIT_FAILURE);
+
+  float scale_factor = 1.0;
+  int scaled_width = 1, scaled_height = 1;
+  InitWindow(1024, 768, file_name);
+  rescale_window(&scale_factor, &scaled_width, &scaled_height);
   SetWindowState(FLAG_WINDOW_ALWAYS_RUN);
   InitAudioDevice();
   SetAudioStreamBufferSizeDefault(BUFFER_SIZE);
@@ -150,13 +165,41 @@ int main(int argc, char **argv) {
   SetAudioStreamVolume(stream, current_volume);
   PlayAudioStream(stream);
   bool stream_paused = false;
-  double start_ts = GetTime();
   float video_timest = 0;
 
-  while (!WindowShouldClose() && !dec_is_decoder_finished(&dc)) {
-    // if (dc.audio_stopped) {
-    //   StopAudioStream(stream);
-    // }
+  while (!WindowShouldClose() && !dec_is_decoder_stopped(&dc)) {
+    mutex_lock(&dc.dc_mutex);
+    DecoderState st = dc.state;
+    mutex_unlock(&dc.dc_mutex);
+
+    if (st == DS_READY) {
+      // Open the next file
+      file_index++;
+      if (file_index >= argc) {
+        // No more files in queue
+        break;
+      }
+      StopAudioStream(stream);
+      UnloadAudioStream(stream);
+      dec_free_graphics_objects(&video_tex);
+
+      file_name = argv[file_index];
+      if (dec_open_file(&dc, file_name) != RESULT_OK)
+        break;
+      rescale_window(&scale_factor, &scaled_width, &scaled_height);
+      dec_init_graphics_objects(&dc, &video_tex);
+
+      stream = LoadAudioStream(dc.sample_rate, 32, 2);
+      SetAudioStreamCallback(stream, audio_cb);
+      SetAudioStreamVolume(stream, current_volume);
+      PlayAudioStream(stream);
+
+      video_timest = 0;
+      audio_timest = AVRAT_ZERO;
+
+      SetWindowTitle(file_name);
+    }
+
     if (IsKeyPressed(KEY_DOWN)) {
       current_volume -= 0.05;
       current_volume = Clamp(current_volume, 0.0, 1.0);
@@ -191,8 +234,6 @@ int main(int argc, char **argv) {
     video_timest = dc.video_timest;
 
     BeginDrawing();
-    // printf("delta: %f, max delta: %f, min delta: %f\n", dc.delta_time,
-    //        dc.max_delta_time, dc.min_delta_time);
 
     dec_draw_video_textures(&video_tex, (Vector2){0, 0}, 0.0, scale_factor,
                             WHITE);
@@ -231,8 +272,7 @@ int main(int argc, char **argv) {
     EndDrawing();
   }
 
-  // free_timeline(&abuffer_timeline);
-  // free_timeline(&vbuffer_timeline);
+  dec_free_graphics_objects(&video_tex);
   dec_shutdown(&dc);
   UnloadAudioStream(stream);
   CloseAudioDevice();
