@@ -27,6 +27,57 @@ float cb_timing, min_cb_timing = INFINITY, max_cb_timing = -INFINITY;
 // struct timespec StartTime;
 // bool video_just_started = false;
 DecoderContext dc;
+FILE *log_file;
+
+void open_log() { log_file = fopen("raylib.log", "w"); }
+void close_log() {
+  if (log_file)
+    fclose(log_file);
+}
+
+void tracelog_impl(FILE *log_stream, TraceLogLevel logLevel, const char *text,
+                   va_list args) {
+  switch (logLevel) {
+  case LOG_INFO:
+    fputs("INFO: ", log_stream);
+    break;
+  case LOG_ERROR:
+    fputs("ERROR: ", log_stream);
+    break;
+  case LOG_DEBUG:
+    fputs("DEBUG: ", log_stream);
+    break;
+  case LOG_FATAL:
+    fputs("FATAL: ", log_stream);
+    break;
+  case LOG_TRACE:
+    fputs("TRACE: ", log_stream);
+    break;
+  case LOG_WARNING:
+    fputs("WARNING: ", log_stream);
+    break;
+  case LOG_ALL:
+  case LOG_NONE:
+    return;
+    break;
+  }
+  vfprintf(log_stream, text, args);
+  fputc('\n', log_stream);
+}
+
+void tracelog_cb(int logLevel, const char *text, va_list args) {
+  FILE *log_stream = stdout;
+  if (logLevel >= LOG_ERROR) {
+    log_stream = stderr;
+  }
+  va_list aq;
+  va_copy(aq, args);
+  va_end(aq);
+  tracelog_impl(log_stream, logLevel, text, args);
+  if (log_file) {
+    tracelog_impl(log_file, logLevel, text, aq);
+  }
+}
 
 void audio_cb(void *frame_data, unsigned int frames) {
   // the amount of data pulled by this function will always be no more than 4096
@@ -57,7 +108,11 @@ void audio_cb(void *frame_data, unsigned int frames) {
 
 int main(int argc, char **argv) {
   // tempfile = fopen("tempfile.out", "wb");
+  open_log();
+  atexit(&close_log);
+
   SetTraceLogLevel(LOG_DEBUG);
+  SetTraceLogCallback(tracelog_cb);
   float current_volume = 0.2;
   if (argc != 2) {
     return 1;
