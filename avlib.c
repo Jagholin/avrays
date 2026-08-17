@@ -1164,9 +1164,16 @@ int dec_update_textures(DecoderContext *ctx, RaylibObjects *objs, float ts) {
     // So we can just return prematurely, no updates needed
     return RESULT_OK;
   }
-  if (ctx->video_timest < ts) {
+  // A special case is when the we are in DS_FILEEOF state, and no more audio
+  // data in the buffers are present. In this state, we will have to override
+  // video_timest<ts checks so that we can flush the rest of the video frames.
+  bool ts_check_override =
+      ctx->state == DS_FILEEOF && ringbuffer_len(&p->audio_buffer) == 0;
+  if (ts_check_override)
+    TraceLog(LOG_DEBUG, "VADECODER: dec_update_textures() override triggered");
+  if (ctx->video_timest < ts || ts_check_override) {
     uint8_t *image_buff = NULL;
-    while (ctx->video_timest < ts) {
+    while (ctx->video_timest < ts || ts_check_override) {
       uint8_t *prev_image = image_buff;
       image_buff = dec_pull_image(ctx, &ctx->video_timest);
       if (image_buff == NULL) {
@@ -1178,7 +1185,7 @@ int dec_update_textures(DecoderContext *ctx, RaylibObjects *objs, float ts) {
       objs->frame_counter++;
       // If we are going for the next iteration, have to make sure to
       // release_image.
-      if (ctx->video_timest < ts) {
+      if (ctx->video_timest < ts || ts_check_override) {
         dec_release_image(ctx);
       }
     }
