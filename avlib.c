@@ -222,6 +222,11 @@ int dec_init_decoder(DecoderContext *ctx) {
 
   p->fr = av_frame_alloc();
   ERRCHECK2(p->fr, "Cant allocate frame");
+  p->fr_audio_target = av_frame_alloc();
+  ERRCHECK2(p->fr_audio_target, "Cant allocate frame");
+  p->fr_audio_target->ch_layout = (AVChannelLayout)AV_CHANNEL_LAYOUT_STEREO;
+  p->fr_audio_target->format = AV_SAMPLE_FMT_FLT;
+
   p->pkt = av_packet_alloc();
   ERRCHECK2(p->pkt, "Cant allocate packet");
 
@@ -360,11 +365,6 @@ int dec_open_file(DecoderContext *ctx, const char *file_name) {
       dur_est = av_q2d(av_mul_q((AVRational){pts, 1}, vid_tb));
     }
   }
-  p->fr_audio_target = av_frame_alloc();
-  ERRCHECK2(p->fr_audio_target, "Cant allocate frame");
-  p->fr_audio_target->ch_layout = (AVChannelLayout)AV_CHANNEL_LAYOUT_STEREO;
-  p->fr_audio_target->format = AV_SAMPLE_FMT_FLT;
-
   mutex_lock(&ctx->dc_mutex);
 
   ctx->duration = dur_est;
@@ -482,9 +482,9 @@ int exec_close_file(DecoderContext *ctx, bool called_as_cleanup) {
     avcodec_free_context(&p->ctxa);
   if (p->ctxv)
     avcodec_free_context(&p->ctxv);
-  if (p->fr_audio_target) {
-    av_frame_free(&p->fr_audio_target);
-  }
+  // if (p->fr_audio_target) {
+  //   av_frame_free(&p->fr_audio_target);
+  // }
 
   ctx->duration = 0;
   p->audio_stream = p->video_stream = 0;
