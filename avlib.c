@@ -1044,7 +1044,11 @@ void dec_update_timelines(DecoderContext *ctx) {
     *tl_loc = 0;
   }
   tl_loc = (unsigned int *)timeline_push(&ctx->vbuffer_timeline);
-  *tl_loc = ringbuffer_len(&p->image_buffer) * 100 / p->image_buffer.buf_size;
+  if (p->image_buffer.buf_size > 0) {
+    *tl_loc = ringbuffer_len(&p->image_buffer) * 100 / p->image_buffer.buf_size;
+  } else {
+    *tl_loc = 0;
+  }
 }
 
 void dec_initialize() { thread_create(&decoder_thread, &decode_thread); }
