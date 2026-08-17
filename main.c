@@ -16,13 +16,14 @@
 #include "vendor/raygui/src/raygui.h"
 
 const bool audio_dbg = false;
+double start_clock_time;
 
 // FILE *tempfile;
 
 #define RAILIB_AUDIO_BUFFER_INTERNAL 4096
 #define BUFFER_SIZE (RAILIB_AUDIO_BUFFER_INTERNAL * 4)
 
-volatile AVRational audio_timest = (AVRational){0, 1};
+AVRational audio_timest = (AVRational){0, 1};
 float cb_timing, min_cb_timing = INFINITY, max_cb_timing = -INFINITY;
 // struct timespec StartTime;
 // bool video_just_started = false;
@@ -35,47 +36,55 @@ void close_log() {
     fclose(log_file);
 }
 
-void tracelog_impl(FILE *log_stream, TraceLogLevel logLevel, const char *text,
-                   va_list args) {
+void tracelog_impl(FILE *log_stream, TraceLogLevel logLevel, double time,
+                   const char *text, va_list args) {
+  const char *log_type = "";
   switch (logLevel) {
   case LOG_INFO:
-    fputs("INFO: ", log_stream);
+    log_type = "INFO";
     break;
   case LOG_ERROR:
-    fputs("ERROR: ", log_stream);
+    log_type = "ERROR";
     break;
   case LOG_DEBUG:
-    fputs("DEBUG: ", log_stream);
+    log_type = "DEBUG";
     break;
   case LOG_FATAL:
-    fputs("FATAL: ", log_stream);
+    log_type = "FATAL";
     break;
   case LOG_TRACE:
-    fputs("TRACE: ", log_stream);
+    log_type = "TRACE";
     break;
   case LOG_WARNING:
-    fputs("WARNING: ", log_stream);
+    log_type = "WARNING";
     break;
   case LOG_ALL:
   case LOG_NONE:
     return;
     break;
   }
+  fprintf(log_stream, "%s (%.3lf): ", log_type, time);
   vfprintf(log_stream, text, args);
   fputc('\n', log_stream);
 }
 
 void tracelog_cb(int logLevel, const char *text, va_list args) {
   FILE *log_stream = stdout;
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  double time = (double)ts.tv_nsec / 1000000000;
+  time += ts.tv_sec;
+  time -= start_clock_time;
+
   if (logLevel >= LOG_ERROR) {
     log_stream = stderr;
   }
   va_list aq;
   va_copy(aq, args);
   va_end(aq);
-  tracelog_impl(log_stream, logLevel, text, args);
+  tracelog_impl(log_stream, logLevel, time, text, args);
   if (log_file) {
-    tracelog_impl(log_file, logLevel, text, aq);
+    tracelog_impl(log_file, logLevel, time, text, aq);
   }
 }
 
@@ -127,6 +136,10 @@ void rescale_window(float *sf, int *sw, int *sh) {
 
 int main(int argc, char **argv) {
   // tempfile = fopen("tempfile.out", "wb");
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  start_clock_time = (double)ts.tv_nsec / 1000000000;
+  start_clock_time += ts.tv_sec;
   open_log();
   atexit(&close_log);
 
