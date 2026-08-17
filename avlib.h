@@ -89,6 +89,7 @@ int dec_pull_audio(DecoderContext *ctx, void *audio_buffer, unsigned int frames,
 void free_decoder_context(DecoderContext *ctx);
 bool dec_is_decoder_stopped(DecoderContext *ctx);
 void dec_seek_to_frame(DecoderContext *ctx, double ts);
+void dec_close_file(DecoderContext *ctx);
 
 void dec_update_timelines(DecoderContext *ctx);
 void dec_initialize();

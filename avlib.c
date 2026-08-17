@@ -17,7 +17,7 @@ typedef sem_t SemaphoreType;
 typedef pthread_t ThreadType;
 
 int seek_to_frame(DecoderContext *ctx, double ts);
-int dec_close_file(DecoderContext *ctx, bool called_as_cleanup);
+int exec_close_file(DecoderContext *ctx, bool called_as_cleanup);
 
 void create_mutex(MutexType *m) { pthread_mutex_init(m, NULL); }
 void create_semaphore(SemaphoreType *s, int init_value) {
@@ -161,7 +161,7 @@ struct SeekCommand *make_seek_command(double target) {
 }
 
 int close_command_dispatch(DecoderContext *ctx, struct DecoderCommand *_) {
-  return dec_close_file(ctx, false);
+  return exec_close_file(ctx, false);
 }
 
 void free_close_command(struct DecoderCommand *cmd) { free(cmd); }
@@ -433,12 +433,12 @@ int dec_open_file(DecoderContext *ctx, const char *file_name) {
 
   return RESULT_OK;
 cleanup:
-  dec_close_file(ctx, true);
+  exec_close_file(ctx, true);
   mutex_unlock(&ctx->dc_mutex);
   return result;
 }
 
-int dec_close_file(DecoderContext *ctx, bool called_as_cleanup) {
+int exec_close_file(DecoderContext *ctx, bool called_as_cleanup) {
   if (ctx->state != DS_STARTUP && ctx->state != DS_PLAYING &&
       ctx->state != DS_FINISHED && ctx->state != DS_FILEEOF &&
       !called_as_cleanup) {
@@ -918,7 +918,19 @@ void dec_seek_to_frame(DecoderContext *ctx, double ts) {
   mutex_lock(&p->command_q_mtx);
 
   struct SeekCommand *cmd = make_seek_command(ts);
-  TraceLog(LOG_DEBUG, "VADECODER: Command added");
+  TraceLog(LOG_DEBUG, "VADECODER: Command seek added");
+  // p->command_queue = queue_add(p->command_queue, cmd);
+  add_command_to_q(&p->command_queue, (struct DecoderCommand **)&cmd, true);
+
+  mutex_unlock(&p->command_q_mtx);
+}
+
+void dec_close_file(DecoderContext *ctx) {
+  struct DecoderPrivate *p = ctx->p;
+  mutex_lock(&p->command_q_mtx);
+
+  struct CloseFileCommand *cmd = make_close_file_command();
+  TraceLog(LOG_DEBUG, "VADECODER: Command closefile added");
   // p->command_queue = queue_add(p->command_queue, cmd);
   add_command_to_q(&p->command_queue, (struct DecoderCommand **)&cmd, true);
 
@@ -964,7 +976,7 @@ void *decode_thread(void *_) {
       break;
     case DS_FINISHED:
       // Close the file and return to the READY state
-      dec_close_file(dc, false);
+      exec_close_file(dc, false);
       break;
     default:
       usleep(1000);

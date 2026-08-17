@@ -210,6 +210,18 @@ int main(int argc, char **argv) {
       current_volume = Clamp(current_volume, 0.0, 1.0);
       SetAudioStreamVolume(stream, current_volume);
     }
+    if (IsKeyPressed(KEY_LEFT_BRACKET) && file_index >= 2 &&
+        (st == DS_PLAYING || st == DS_STARTUP || st == DS_FINISHED)) {
+      // go to the previous file
+      // -2 because the code in if (st==DS_READY) will increment this.
+      file_index -= 2;
+      dec_close_file(&dc);
+    }
+    if (IsKeyPressed(KEY_RIGHT_BRACKET) && file_index + 1 < argc &&
+        (st == DS_PLAYING || st == DS_STARTUP || st == DS_FINISHED)) {
+      // file_index will be incremented in the DS_READY handler above
+      dec_close_file(&dc);
+    }
     if (IsKeyPressed(KEY_SPACE)) {
       if (stream_paused) {
         PlayAudioStream(stream);
@@ -241,8 +253,8 @@ int main(int argc, char **argv) {
     if (!stream_paused)
       dec_update_timelines(&dc);
 
-    Vector2 overlay_dims =
-        dec_draw_debug_overlay(&dc, &video_tex, audio_ts_double, 10, 50);
+    /* Vector2 overlay_dims = */
+    dec_draw_debug_overlay(&dc, &video_tex, audio_ts_double, 10, 50);
 
     if (stream_paused) {
       DrawRectangle(scaled_width / 2 - 30, scaled_height / 2 - 50, 20, 100,
