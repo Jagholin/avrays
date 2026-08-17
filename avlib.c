@@ -548,7 +548,7 @@ static int send_eof2codecs(struct DecoderPrivate *p) {
 
 static int pull_frame(struct DecoderPrivate *p) {
   if (p->fr_populated) {
-    TraceLog(LOG_DEBUG, "VADECODER: pull_frame shortcut\n");
+    TraceLog(LOG_DEBUG, "VADECODER: pull_frame shortcut");
     return RESULT_OK;
   }
 
@@ -625,7 +625,7 @@ static void init_audio_buffer(struct DecoderPrivate *p) {
     audio_ring_size += size_adj;
   }
   p->audio_buffer = make_ringbuffer(audio_ring_size);
-  TraceLog(LOG_INFO, "VADECODER: Audio buffer size is now %zu\n",
+  TraceLog(LOG_INFO, "VADECODER: Audio buffer size is now %zu",
            p->audio_buffer.buf_size);
 }
 
@@ -1120,7 +1120,7 @@ int dec_init_graphics_objects(DecoderContext *ctx, RaylibObjects *objs) {
     shader_code = fs_yuv420p10;
     break;
   default:
-    TraceLog(LOG_ERROR, "VADECODER: Dont recognize pix fmt %d\n",
+    TraceLog(LOG_ERROR, "VADECODER: Dont recognize pix fmt %d",
              ctx->pixel_format);
     return RESULT_ERROR;
   }
