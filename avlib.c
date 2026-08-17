@@ -632,17 +632,17 @@ static void init_audio_buffer(struct DecoderPrivate *p) {
 static void init_swr_ifneeded(DecoderContext *ctx) {
   struct DecoderPrivate *p = ctx->p;
   // p->fr has to be an audio frame here
-  if (p->audio_configured &&
-      p->fr->nb_samples == p->fr_audio_target->nb_samples)
+  if (p->audio_configured /*&&
+      p->fr->nb_samples == p->fr_audio_target->nb_samples*/)
     return;
 
-  if (p->audio_configured) {
+  /*if (p->audio_configured) {
     // If it was configured already, we have to reconfigure a few things
     av_frame_unref(p->fr_audio_target);
 
     p->fr_audio_target->ch_layout = (AVChannelLayout)AV_CHANNEL_LAYOUT_STEREO;
     p->fr_audio_target->format = AV_SAMPLE_FMT_FLT;
-  }
+  }*/
 
   ctx->sample_rate = p->fr->sample_rate;
   p->fr_audio_target->sample_rate = ctx->sample_rate;
@@ -657,14 +657,16 @@ static void init_swr_ifneeded(DecoderContext *ctx) {
 static int process_audio_frame(DecoderContext *ctx) {
   struct DecoderPrivate *p = ctx->p;
   int result = RESULT_OK;
+  bool fresh_frame = false;
   if (!p->fr_audio_populated) {
     init_swr_ifneeded(ctx);
     assert(p->fr_populated);
     result = swr_convert_frame(p->swr, p->fr_audio_target, p->fr);
-    assert(swr_get_delay(p->swr, ctx->sample_rate) == 0);
+    // assert(swr_get_delay(p->swr, ctx->sample_rate) == 0);
     ERRCHECK("Cant convert audio frame");
     p->fr_populated = false;
     p->fr_audio_populated = true;
+    fresh_frame = true;
   }
 
   if (p->audio_buffer_size == 0) {
@@ -685,10 +687,12 @@ static int process_audio_frame(DecoderContext *ctx) {
     return RESULT_STALL;
   }
 
-  if (p->timestamp_reset_sm == TR_BEGIN) {
+  if (p->timestamp_reset_sm == TR_BEGIN && fresh_frame) {
     // Get new timestamp from the audio frame
     p->new_timestamp =
         av_mul_q((AVRational){p->fr->best_effort_timestamp, 1}, ctx->audio_tb);
+    TraceLog(LOG_DEBUG, "VADECODER: Captured timestamp: %d / %d",
+             p->new_timestamp.num, p->new_timestamp.den);
     p->timestamp_reset_sm = TR_TIMESTAMP_CAPTURED;
   }
   p->fr_audio_populated = false;
@@ -710,9 +714,15 @@ int dec_continue_decoding(DecoderContext *ctx) {
 
   int result = RESULT_OK;
 
-  // Assert that SWR doent have any data left in its buffers
-  if (p->audio_configured)
-    assert(swr_get_delay(p->swr, ctx->sample_rate) == 0);
+  // If we have any data in SWR buffer, try to drain it first
+  if (p->audio_configured) {
+    if (!p->fr_audio_populated && swr_get_delay(p->swr, ctx->sample_rate) > 0) {
+      result = swr_convert_frame(p->swr, p->fr_audio_target, NULL);
+      ERRCHECK("error extracting extra audio data");
+      p->fr_audio_populated = true;
+      p->frame_is_audio = true;
+    }
+  }
 
   // 2. If we already have a frame waiting from previous iteration, just use it
   if (!(p->fr_populated || p->fr_audio_populated)) {
@@ -944,8 +954,8 @@ void *decode_thread(void *_) {
         } else {
           char err_desc[256];
           av_strerror(result, err_desc, 256);
-          fprintf(stderr, "Call count at err: %d, err: %d(%s)\n", call_count,
-                  result, err_desc);
+          TraceLog(LOG_ERROR, "Call count at err: %d, err: %d(%s)", call_count,
+                   result, err_desc);
           // dc->state = DS_ERROR;
           switch_dec_state(dc, DS_ERROR);
         }
