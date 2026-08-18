@@ -15,12 +15,13 @@ struct DecoderPrivate;
 
 typedef enum DecoderState {
   DS_UNINIT = 0, // default ZERO value
-  DS_READY,      // after call to dec_init_decoder
+  DS_READY,      // after call to avray_init_decoder
   DS_STARTUP,    // filling buffers before playback
   DS_PLAYING,    // actively playing the video
-  DS_FILEEOF,    // video file at EOF
-  DS_FINISHED,   // File at EOF and buffers are empty
-  DS_SHUTDOWN,   // after call to dec_shutdown
+  DS_FILEEOF,    // video file at EOF, but buffers aren't empty yet
+  DS_FINISHED,   // File at EOF and buffers are empty. Decoder thread transfers
+                 // this state to DS_READY.
+  DS_SHUTDOWN,   // after call to avray_shutdown
   DS_ERROR = 100,
 } DecoderState;
 
@@ -79,30 +80,30 @@ typedef struct DecoderContext {
 #define RESULT_EOF 2
 int time_to_str(double seconds, char *buf, size_t n);
 
-int dec_init_decoder(DecoderContext *ctx);
-int dec_open_file(DecoderContext *ctx, const char *file_name);
-// int dec_continue_decoding(DecoderContext *ctx);
-uint8_t *dec_pull_image(DecoderContext *ctx, float *timestamp);
-void dec_release_image(DecoderContext *ctx);
-int dec_pull_audio(DecoderContext *ctx, void *audio_buffer, unsigned int frames,
-                   volatile AVRational *ts);
+int avray_init_decoder(DecoderContext *ctx);
+int avray_open_file(DecoderContext *ctx, const char *file_name);
+// int avray_continue_decoding(DecoderContext *ctx);
+uint8_t *avray_pull_image(DecoderContext *ctx, float *timestamp);
+void avray_release_image(DecoderContext *ctx);
+int avray_pull_audio(DecoderContext *ctx, void *audio_buffer,
+                     unsigned int frames, volatile AVRational *ts);
 void free_decoder_context(DecoderContext *ctx);
-bool dec_is_decoder_stopped(DecoderContext *ctx);
-void dec_seek_to_frame(DecoderContext *ctx, double ts);
-void dec_close_file(DecoderContext *ctx);
+bool avray_is_decoder_stopped(DecoderContext *ctx);
+void avray_seek_to_frame(DecoderContext *ctx, double ts);
+void avray_close_file(DecoderContext *ctx);
 
-void dec_update_timelines(DecoderContext *ctx);
-void dec_initialize();
-void dec_shutdown(DecoderContext *ctx);
-// void dec_wait_ready(DecoderContext *ctx);
+void avray_update_timelines(DecoderContext *ctx);
+void avray_initialize();
+void avray_shutdown(DecoderContext *ctx);
+// void avray_wait_ready(DecoderContext *ctx);
 
-int dec_init_graphics_objects(DecoderContext *ctx, RaylibObjects *objs);
-int dec_free_graphics_objects(RaylibObjects *objs);
-int dec_update_textures(DecoderContext *ctx, RaylibObjects *objs, float ts);
-int dec_draw_video_textures(RaylibObjects *objs, Vector2 position,
-                            float rotation, float scale_factor, Color tint);
+int avray_init_graphics_objects(DecoderContext *ctx, RaylibObjects *objs);
+int avray_free_graphics_objects(RaylibObjects *objs);
+int avray_update_textures(DecoderContext *ctx, RaylibObjects *objs, float ts);
+int avray_draw_video_textures(RaylibObjects *objs, Vector2 position,
+                              float rotation, float scale_factor, Color tint);
 void timeline_draw_ui(TimeLine tl, int x, int y, int width, int height,
                       unsigned int max);
-Vector2 dec_draw_debug_overlay(DecoderContext *ctx, RaylibObjects *objs,
-                               double audio_ts, int x, int y);
+Vector2 avray_draw_debug_overlay(DecoderContext *ctx, RaylibObjects *objs,
+                                 double audio_ts, int x, int y);
 #endif // !AVLIB_H

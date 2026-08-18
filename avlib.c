@@ -117,8 +117,7 @@ const char *state_str(DecoderState st) {
 }
 
 void switch_dec_state(DecoderContext *ctx, DecoderState newState) {
-  TraceLog(LOG_INFO, "VADECODER: Switching to new state: %s",
-           state_str(newState));
+  TraceLog(LOG_INFO, "AVRAYS: Switching to new state: %s", state_str(newState));
   ctx->state = newState;
 }
 
@@ -197,7 +196,7 @@ void add_command_to_q(LinkedQueue **q, struct DecoderCommand **cmd,
 static DecoderContext *dc;
 ThreadType decoder_thread;
 
-int dec_init_decoder(DecoderContext *ctx) {
+int avray_init_decoder(DecoderContext *ctx) {
   if (dc != NULL) {
     return RESULT_ERROR;
   }
@@ -252,7 +251,7 @@ int time_probe_seek_pts(DecoderContext *ctx, int64_t *presult) {
   int64_t timed = AV_TIME_BASE;
   // 1. Seek to the end of the file as much as we reasonably can
   int tres = avformat_seek_file(p->fmt_ctx, -1, 0, INT64_MAX, INT64_MAX, 0);
-  TraceLog(LOG_DEBUG, "VADECODER: time_probe_seek_pts(): Timeprobe returned %d",
+  TraceLog(LOG_DEBUG, "AVRAYS: time_probe_seek_pts(): Timeprobe returned %d",
            tres);
   int result = RESULT_ERROR;
   if (tres != 0) {
@@ -292,7 +291,7 @@ int time_probe_seek_pts(DecoderContext *ctx, int64_t *presult) {
   }
 cleanup:
   tres = avformat_seek_file(p->fmt_ctx, -1, 0, 0, timed, 0);
-  TraceLog(LOG_DEBUG, "VADECODER: Seek back %d", tres);
+  TraceLog(LOG_DEBUG, "AVRAYS: Seek back %d", tres);
   // We might not be precisely at 00:00, so receive current timestamp from
   // streams.
   p->timestamp_reset_sm = TR_BEGIN;
@@ -300,7 +299,7 @@ cleanup:
   return result;
 }
 
-int dec_open_file(DecoderContext *ctx, const char *file_name) {
+int avray_open_file(DecoderContext *ctx, const char *file_name) {
   assert(ctx->state == DS_READY);
   struct DecoderPrivate *p = ctx->p;
   int result = avformat_open_input(&p->fmt_ctx, file_name, NULL, NULL);
@@ -322,18 +321,18 @@ int dec_open_file(DecoderContext *ctx, const char *file_name) {
 
   TraceLog(
       LOG_DEBUG,
-      "VADECODER: Audio sample rate: %d, bits per sample: %d, channels: %d, "
+      "AVRAYS: Audio sample rate: %d, bits per sample: %d, channels: %d, "
       "frame "
       "size: %d",
       origin_par_audio->sample_rate, origin_par_audio->bits_per_coded_sample,
       origin_par_audio->ch_layout.nb_channels, origin_par_audio->frame_size);
-  TraceLog(LOG_DEBUG, "VADECODER: Video frame rate: %d/%d",
+  TraceLog(LOG_DEBUG, "AVRAYS: Video frame rate: %d/%d",
            origin_par->framerate.num, origin_par->framerate.den);
 
   const AVCodec *codec = avcodec_find_decoder(origin_par->codec_id);
   ERRCHECK2(codec, "Can't find decoder");
   const AVCodec *audio_codec = avcodec_find_decoder(origin_par_audio->codec_id);
-  TraceLog(LOG_INFO, "VADECODER: Video decoded with %s, audio with %s",
+  TraceLog(LOG_INFO, "AVRAYS: Video decoded with %s, audio with %s",
            codec->name, audio_codec->name);
   const char *duration_method;
   switch (p->fmt_ctx->duration_estimation_method) {
@@ -353,8 +352,8 @@ int dec_open_file(DecoderContext *ctx, const char *file_name) {
 
   char msg[128];
   time_to_str(dur_est, msg, 128);
-  TraceLog(LOG_INFO, "VADECODER: Estimated duration %lf sec(%s) from %s",
-           dur_est, msg, duration_method);
+  TraceLog(LOG_INFO, "AVRAYS: Estimated duration %lf sec(%s) from %s", dur_est,
+           msg, duration_method);
 
   if (p->fmt_ctx->duration_estimation_method == AVFMT_DURATION_FROM_BITRATE) {
     // Duration might not be accurate, estimate it with other methods instead
@@ -387,7 +386,7 @@ int dec_open_file(DecoderContext *ctx, const char *file_name) {
   ERRCHECK("Cant open audio decoder");
 
   const AVPixFmtDescriptor *pix_desc = av_pix_fmt_desc_get(p->ctxv->pix_fmt);
-  TraceLog(LOG_INFO, "VADECODER: Frame is %dx%d (%s)", p->ctxv->width,
+  TraceLog(LOG_INFO, "AVRAYS: Frame is %dx%d (%s)", p->ctxv->width,
            p->ctxv->height, pix_desc->name);
   ctx->video_width = p->ctxv->width;
   ctx->video_height = p->ctxv->height;
@@ -406,24 +405,24 @@ int dec_open_file(DecoderContext *ctx, const char *file_name) {
   p->image_buffer = make_ringbuffer(p->image_buffer_size * buffer_frames);
 
   TraceLog(LOG_DEBUG,
-           "VADECODER: Audio codec data: sample format %s, sample rate %d, "
+           "AVRAYS: Audio codec data: sample format %s, sample rate %d, "
            "bytes per sample "
            "%d",
            av_get_sample_fmt_name(p->ctxa->sample_fmt), p->ctxa->sample_rate,
            av_get_bytes_per_sample(p->ctxa->sample_fmt));
   ctx->sample_rate = p->ctxa->sample_rate;
 
-  TraceLog(LOG_DEBUG, "VADECODER: video Time base is %d/%d",
+  TraceLog(LOG_DEBUG, "AVRAYS: video Time base is %d/%d",
            p->fmt_ctx->streams[p->video_stream]->time_base.num,
            p->fmt_ctx->streams[p->video_stream]->time_base.den);
-  TraceLog(LOG_DEBUG, "VADECODER: audio Time base is %d/%d",
+  TraceLog(LOG_DEBUG, "AVRAYS: audio Time base is %d/%d",
            p->fmt_ctx->streams[p->audio_stream]->time_base.num,
            p->fmt_ctx->streams[p->audio_stream]->time_base.den);
   ctx->video_tb = p->fmt_ctx->streams[p->video_stream]->time_base;
   ctx->audio_tb = p->fmt_ctx->streams[p->audio_stream]->time_base;
 
-  TraceLog(LOG_DEBUG, "VADECODER: Codec framerate: %d/%d",
-           p->ctxv->framerate.num, p->ctxv->framerate.den);
+  TraceLog(LOG_DEBUG, "AVRAYS: Codec framerate: %d/%d", p->ctxv->framerate.num,
+           p->ctxv->framerate.den);
   ctx->video_framerate = p->ctxv->framerate;
   ctx->pixel_format = origin_par->format;
 
@@ -548,7 +547,7 @@ static int send_eof2codecs(struct DecoderPrivate *p) {
 
 static int pull_frame(struct DecoderPrivate *p) {
   if (p->fr_populated) {
-    TraceLog(LOG_DEBUG, "VADECODER: pull_frame shortcut");
+    TraceLog(LOG_DEBUG, "AVRAYS: pull_frame shortcut");
     return RESULT_OK;
   }
 
@@ -625,7 +624,7 @@ static void init_audio_buffer(struct DecoderPrivate *p) {
     audio_ring_size += size_adj;
   }
   p->audio_buffer = make_ringbuffer(audio_ring_size);
-  TraceLog(LOG_INFO, "VADECODER: Audio buffer size is now %zu",
+  TraceLog(LOG_INFO, "AVRAYS: Audio buffer size is now %zu",
            p->audio_buffer.buf_size);
 }
 
@@ -648,7 +647,7 @@ static void init_swr_ifneeded(DecoderContext *ctx) {
   p->fr_audio_target->sample_rate = ctx->sample_rate;
 
   int result = swr_config_frame(p->swr, p->fr_audio_target, p->fr);
-  TraceLog(LOG_DEBUG, "VADECODER: SWR (re) initialized");
+  TraceLog(LOG_DEBUG, "AVRAYS: SWR (re) initialized");
   assert(result == 0);
 
   p->audio_configured = true;
@@ -691,7 +690,7 @@ static int process_audio_frame(DecoderContext *ctx) {
     // Get new timestamp from the audio frame
     p->new_timestamp =
         av_mul_q((AVRational){p->fr->best_effort_timestamp, 1}, ctx->audio_tb);
-    TraceLog(LOG_DEBUG, "VADECODER: Captured timestamp: %d / %d",
+    TraceLog(LOG_DEBUG, "AVRAYS: Captured timestamp: %d / %d",
              p->new_timestamp.num, p->new_timestamp.den);
     p->timestamp_reset_sm = TR_TIMESTAMP_CAPTURED;
   }
@@ -701,7 +700,7 @@ cleanup:
   return result;
 }
 
-int dec_continue_decoding(DecoderContext *ctx) {
+int avray_continue_decoding(DecoderContext *ctx) {
   assert(ctx == dc);
   if (ctx->state != DS_PLAYING && ctx->state != DS_STARTUP) {
     return RESULT_OK;
@@ -788,14 +787,14 @@ void try_move_to_finished_state(DecoderContext *ctx) {
   }
 }
 
-uint8_t *dec_pull_image(DecoderContext *ctx, float *timestamp) {
+uint8_t *avray_pull_image(DecoderContext *ctx, float *timestamp) {
   struct DecoderPrivate *p = ctx->p;
 
   mutex_lock(&p->image_buffer_mtx);
   // File could have been closed before we locked the mutex, or something else
   // might've happened
   if (ctx->state != DS_PLAYING && ctx->state != DS_FILEEOF) {
-    // Even in this case we expect dec_release_image to be called,
+    // Even in this case we expect avray_release_image to be called,
     // so we don't unlock the mutex here.
     return NULL;
   }
@@ -810,13 +809,13 @@ uint8_t *dec_pull_image(DecoderContext *ctx, float *timestamp) {
   return data + sizeof(float);
 }
 
-void dec_release_image(DecoderContext *ctx) {
+void avray_release_image(DecoderContext *ctx) {
   try_unlock_decoder_sem(ctx);
   mutex_unlock(&ctx->p->image_buffer_mtx);
 }
 
-int dec_pull_audio(DecoderContext *ctx, void *audio_buffer, unsigned int frames,
-                   volatile AVRational *ts) {
+int avray_pull_audio(DecoderContext *ctx, void *audio_buffer,
+                     unsigned int frames, volatile AVRational *ts) {
   // printf("pull_audio %d called\n", frames);
   struct DecoderPrivate *p = ctx->p;
   if (ctx->state != DS_PLAYING && ctx->state != DS_FILEEOF) {
@@ -858,28 +857,28 @@ int seek_to_frame(DecoderContext *ctx, double ts) {
   struct DecoderPrivate *p = ctx->p;
   mutex_lock(&p->audio_buffer_mtx);
   mutex_lock(&p->image_buffer_mtx);
-  TraceLog(LOG_DEBUG, "VADECODER: seeking to %ld", time);
+  TraceLog(LOG_DEBUG, "AVRAYS: seeking to %ld", time);
   int result = avformat_seek_file(p->fmt_ctx, -1, time - time_dt, time,
                                   time + time_dt, 0);
-  TraceLog(LOG_DEBUG, "VADECODER: Seek file (+-1) returns %d", result);
+  TraceLog(LOG_DEBUG, "AVRAYS: Seek file (+-1) returns %d", result);
   if (result != 0) {
     result = avformat_seek_file(p->fmt_ctx, -1, time - 5 * time_dt, time,
                                 time + 5 * time_dt, 0);
-    TraceLog(LOG_DEBUG, "VADECODER: Seek file (+-5) returns %d", result);
+    TraceLog(LOG_DEBUG, "AVRAYS: Seek file (+-5) returns %d", result);
   }
   if (result != 0) {
     result = avformat_seek_file(p->fmt_ctx, -1, time - 10 * time_dt, time,
                                 time + 10 * time_dt, 0);
-    TraceLog(LOG_DEBUG, "VADECODER: Seek file (+-10) returns %d", result);
+    TraceLog(LOG_DEBUG, "AVRAYS: Seek file (+-10) returns %d", result);
   }
   if (result != 0) {
     result = avformat_seek_file(p->fmt_ctx, -1, time - 20 * time_dt, time,
                                 time + 20 * time_dt, 0);
-    TraceLog(LOG_DEBUG, "VADECODER: Seek file (+-20) returns %d", result);
+    TraceLog(LOG_DEBUG, "AVRAYS: Seek file (+-20) returns %d", result);
   }
   if (result != 0) {
     result = avformat_seek_file(p->fmt_ctx, -1, 0, time, INT64_MAX, 0);
-    TraceLog(LOG_DEBUG, "VADECODER: Seek file (+-INF) returns %d", result);
+    TraceLog(LOG_DEBUG, "AVRAYS: Seek file (+-INF) returns %d", result);
   }
   if (result != 0) {
     mutex_unlock(&p->image_buffer_mtx);
@@ -913,24 +912,24 @@ int seek_to_frame(DecoderContext *ctx, double ts) {
   return RESULT_OK;
 }
 
-void dec_seek_to_frame(DecoderContext *ctx, double ts) {
+void avray_seek_to_frame(DecoderContext *ctx, double ts) {
   struct DecoderPrivate *p = ctx->p;
   mutex_lock(&p->command_q_mtx);
 
   struct SeekCommand *cmd = make_seek_command(ts);
-  TraceLog(LOG_DEBUG, "VADECODER: Command seek added");
+  TraceLog(LOG_DEBUG, "AVRAYS: Command seek added");
   // p->command_queue = queue_add(p->command_queue, cmd);
   add_command_to_q(&p->command_queue, (struct DecoderCommand **)&cmd, true);
 
   mutex_unlock(&p->command_q_mtx);
 }
 
-void dec_close_file(DecoderContext *ctx) {
+void avray_close_file(DecoderContext *ctx) {
   struct DecoderPrivate *p = ctx->p;
   mutex_lock(&p->command_q_mtx);
 
   struct CloseFileCommand *cmd = make_close_file_command();
-  TraceLog(LOG_DEBUG, "VADECODER: Command closefile added");
+  TraceLog(LOG_DEBUG, "AVRAYS: Command closefile added");
   // p->command_queue = queue_add(p->command_queue, cmd);
   add_command_to_q(&p->command_queue, (struct DecoderCommand **)&cmd, true);
 
@@ -951,13 +950,13 @@ void *decode_thread(void *_) {
       struct DecoderCommand *cmd = queue_pop(&dc->p->command_queue);
       mutex_unlock(&dc->p->command_q_mtx);
       if (cmd) {
-        TraceLog(LOG_DEBUG, "VADECODER: Command received");
+        TraceLog(LOG_DEBUG, "AVRAYS: Command received");
         cmd->dispatch(dc, cmd);
         cmd->free_me(cmd);
       }
       // FALLTHROUGH
     case DS_STARTUP:
-      result = dec_continue_decoding(dc);
+      result = avray_continue_decoding(dc);
       call_count++;
       if (result < 0) {
         if (result == AVERROR_EOF) {
@@ -983,11 +982,11 @@ void *decode_thread(void *_) {
       break;
     }
   } while (dc->state != DS_SHUTDOWN);
-  TraceLog(LOG_INFO, "VADECODER: Decode THREAD shutdown.");
+  TraceLog(LOG_INFO, "AVRAYS: Decode THREAD shutdown.");
   return (void *)result;
 }
 
-bool dec_is_decoder_stopped(DecoderContext *ctx) {
+bool avray_is_decoder_stopped(DecoderContext *ctx) {
   return ctx->state == DS_SHUTDOWN /* || ctx->state == DS_FINISHED*/ ||
          ctx->state == DS_ERROR;
 }
@@ -1035,7 +1034,7 @@ void free_decoder_context(DecoderContext *ctx) {
   dc = NULL;
 }
 
-void dec_update_timelines(DecoderContext *ctx) {
+void avray_update_timelines(DecoderContext *ctx) {
   struct DecoderPrivate *p = ctx->p;
   unsigned int *tl_loc = (unsigned int *)timeline_push(&ctx->abuffer_timeline);
   if (p->audio_buffer_size > 0) {
@@ -1051,15 +1050,15 @@ void dec_update_timelines(DecoderContext *ctx) {
   }
 }
 
-void dec_initialize() { thread_create(&decoder_thread, &decode_thread); }
-// void dec_wait_ready(DecoderContext *ctx) {
+void avray_initialize() { thread_create(&decoder_thread, &decode_thread); }
+// void avray_wait_ready(DecoderContext *ctx) {
 //   semaphore_wait(&ctx->p->startup_sem);
 // }
 
-void dec_shutdown(DecoderContext *ctx) {
+void avray_shutdown(DecoderContext *ctx) {
   // printf("Thread shutdown isn't implemented yet\n");
   switch_dec_state(ctx, DS_SHUTDOWN);
-  // Release semaphore sem so that dec_continue_decoding could proceed
+  // Release semaphore sem so that avray_continue_decoding could proceed
   semaphore_incr(&ctx->p->sem);
   pthread_join(decoder_thread, NULL);
   free_decoder_context(ctx);
@@ -1119,7 +1118,7 @@ const char *fs_yuv420p = "#version 130 \n"
                          "   finalColor=vec4(r, g, b, 1.0);"
                          "}";
 
-int dec_init_graphics_objects(DecoderContext *ctx, RaylibObjects *objs) {
+int avray_init_graphics_objects(DecoderContext *ctx, RaylibObjects *objs) {
   *objs = (RaylibObjects){};
   PixelFormat pf;
   const char *shader_code;
@@ -1136,8 +1135,7 @@ int dec_init_graphics_objects(DecoderContext *ctx, RaylibObjects *objs) {
     shader_code = fs_yuv420p10;
     break;
   default:
-    TraceLog(LOG_ERROR, "VADECODER: Dont recognize pix fmt %d",
-             ctx->pixel_format);
+    TraceLog(LOG_ERROR, "AVRAYS: Dont recognize pix fmt %d", ctx->pixel_format);
     return RESULT_ERROR;
   }
 
@@ -1164,7 +1162,7 @@ int dec_init_graphics_objects(DecoderContext *ctx, RaylibObjects *objs) {
   return RESULT_OK;
 }
 
-int dec_free_graphics_objects(RaylibObjects *objs) {
+int avray_free_graphics_objects(RaylibObjects *objs) {
   UnloadShader(objs->video_shader);
   UnloadTexture(objs->tex_luma);
   UnloadTexture(objs->tex_u);
@@ -1172,7 +1170,7 @@ int dec_free_graphics_objects(RaylibObjects *objs) {
   return RESULT_OK;
 }
 
-int dec_update_textures(DecoderContext *ctx, RaylibObjects *objs, float ts) {
+int avray_update_textures(DecoderContext *ctx, RaylibObjects *objs, float ts) {
   // If the TimestampResetSM is active, the ts is probably not reliable
   struct DecoderPrivate *p = ctx->p;
   if (p->timestamp_reset_sm != TR_NONE &&
@@ -1186,12 +1184,12 @@ int dec_update_textures(DecoderContext *ctx, RaylibObjects *objs, float ts) {
   bool ts_check_override =
       ctx->state == DS_FILEEOF && ringbuffer_len(&p->audio_buffer) == 0;
   if (ts_check_override)
-    TraceLog(LOG_DEBUG, "VADECODER: dec_update_textures() override triggered");
+    TraceLog(LOG_DEBUG, "AVRAYS: avray_update_textures() override triggered");
   if (ctx->video_timest < ts || ts_check_override) {
     uint8_t *image_buff = NULL;
     while (ctx->video_timest < ts || ts_check_override) {
       uint8_t *prev_image = image_buff;
-      image_buff = dec_pull_image(ctx, &ctx->video_timest);
+      image_buff = avray_pull_image(ctx, &ctx->video_timest);
       if (image_buff == NULL) {
         // If we ran out of frames, just show the last one no matter the
         // timestamp.
@@ -1202,7 +1200,7 @@ int dec_update_textures(DecoderContext *ctx, RaylibObjects *objs, float ts) {
       // If we are going for the next iteration, have to make sure to
       // release_image.
       if (ctx->video_timest < ts || ts_check_override) {
-        dec_release_image(ctx);
+        avray_release_image(ctx);
       }
     }
     if (image_buff) {
@@ -1212,14 +1210,14 @@ int dec_update_textures(DecoderContext *ctx, RaylibObjects *objs, float ts) {
       image_buff += ctx->video_height * ctx->video_width * objs->bytespp / 4;
       UpdateTexture(objs->tex_v, image_buff);
     }
-    dec_release_image(ctx);
+    avray_release_image(ctx);
   }
 
   return RESULT_OK;
 }
 
-int dec_draw_video_textures(RaylibObjects *objs, Vector2 position,
-                            float rotation, float scale_factor, Color tint) {
+int avray_draw_video_textures(RaylibObjects *objs, Vector2 position,
+                              float rotation, float scale_factor, Color tint) {
   BeginShaderMode(objs->video_shader);
   {
     SetShaderValueTexture(objs->video_shader, objs->y_location, objs->tex_luma);
@@ -1279,8 +1277,8 @@ void timeline_draw_ui(TimeLine tl, int x, int y, int width, int height,
   free(line_points);
 }
 
-Vector2 dec_draw_debug_overlay(DecoderContext *ctx, RaylibObjects *objs,
-                               double audio_ts_double, int x, int y) {
+Vector2 avray_draw_debug_overlay(DecoderContext *ctx, RaylibObjects *objs,
+                                 double audio_ts_double, int x, int y) {
   struct DecoderPrivate *p = ctx->p;
   const unsigned int LINEHEIGHT = 25;
   const unsigned int FONTSIZE = 20;

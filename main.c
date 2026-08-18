@@ -96,12 +96,12 @@ void audio_cb(void *frame_data, unsigned int frames) {
   // 2);
   struct timespec time_start, time_end;
   clock_gettime(CLOCK_MONOTONIC, &time_start);
-  /*int size = */ dec_pull_audio(&dc, frame_data, frames, &audio_timest);
+  /*int size = */ avray_pull_audio(&dc, frame_data, frames, &audio_timest);
 
   // printf("pull audio returned %d\n", size);
   static bool info_given = false;
   if (!info_given) {
-    TraceLog(LOG_INFO, "VADECODER: sample rate: %d", dc.sample_rate);
+    TraceLog(LOG_INFO, "AVRAYS: sample rate: %d", dc.sample_rate);
     info_given = true;
   }
   // audio_timest += (float)frames / dc.sample_rate;
@@ -149,14 +149,14 @@ int main(int argc, char **argv) {
   if (argc < 2) {
     return 1;
   }
-  dec_initialize();
-  int result = dec_init_decoder(&dc);
+  avray_initialize();
+  int result = avray_init_decoder(&dc);
   if (result != 0)
     exit(EXIT_FAILURE);
 
   unsigned int file_index = 1;
   char *file_name = argv[file_index];
-  result = dec_open_file(&dc, file_name);
+  result = avray_open_file(&dc, file_name);
   if (result != 0)
     exit(EXIT_FAILURE);
 
@@ -170,8 +170,8 @@ int main(int argc, char **argv) {
 
   SetTargetFPS(60);
   RaylibObjects video_tex;
-  dec_init_graphics_objects(&dc, &video_tex);
-  // dec_wait_ready(&dc);
+  avray_init_graphics_objects(&dc, &video_tex);
+  // avray_wait_ready(&dc);
 
   AudioStream stream = LoadAudioStream(dc.sample_rate, 32, 2);
   SetAudioStreamCallback(stream, audio_cb);
@@ -180,7 +180,7 @@ int main(int argc, char **argv) {
   bool stream_paused = false;
   float video_timest = 0;
 
-  while (!WindowShouldClose() && !dec_is_decoder_stopped(&dc)) {
+  while (!WindowShouldClose() && !avray_is_decoder_stopped(&dc)) {
     mutex_lock(&dc.dc_mutex);
     DecoderState st = dc.state;
     mutex_unlock(&dc.dc_mutex);
@@ -194,13 +194,13 @@ int main(int argc, char **argv) {
       }
       StopAudioStream(stream);
       UnloadAudioStream(stream);
-      dec_free_graphics_objects(&video_tex);
+      avray_free_graphics_objects(&video_tex);
 
       file_name = argv[file_index];
-      if (dec_open_file(&dc, file_name) != RESULT_OK)
+      if (avray_open_file(&dc, file_name) != RESULT_OK)
         break;
       rescale_window(&scale_factor, &scaled_width, &scaled_height);
-      dec_init_graphics_objects(&dc, &video_tex);
+      avray_init_graphics_objects(&dc, &video_tex);
 
       stream = LoadAudioStream(dc.sample_rate, 32, 2);
       SetAudioStreamCallback(stream, audio_cb);
@@ -228,12 +228,12 @@ int main(int argc, char **argv) {
       // go to the previous file
       // -2 because the code in if (st==DS_READY) will increment this.
       file_index -= 2;
-      dec_close_file(&dc);
+      avray_close_file(&dc);
     }
     if (IsKeyPressed(KEY_RIGHT_BRACKET) && file_index + 1 < argc &&
         (st == DS_PLAYING || st == DS_STARTUP || st == DS_FINISHED)) {
       // file_index will be incremented in the DS_READY handler above
-      dec_close_file(&dc);
+      avray_close_file(&dc);
     }
     if (IsKeyPressed(KEY_SPACE)) {
       if (stream_paused) {
@@ -246,28 +246,28 @@ int main(int argc, char **argv) {
     }
     if (IsKeyPressed(KEY_D)) {
       if (video_timest != 0)
-        dec_seek_to_frame(&dc, video_timest + 10.0);
+        avray_seek_to_frame(&dc, video_timest + 10.0);
     }
     if (IsKeyPressed(KEY_A)) {
       if (video_timest != 0)
-        dec_seek_to_frame(&dc, video_timest - 20.0);
+        avray_seek_to_frame(&dc, video_timest - 20.0);
     }
     ClearBackground(BLACK);
 
     double audio_ts_double = av_q2d(audio_timest);
-    dec_update_textures(&dc, &video_tex, audio_ts_double);
+    avray_update_textures(&dc, &video_tex, audio_ts_double);
     video_timest = dc.video_timest;
 
     BeginDrawing();
 
-    dec_draw_video_textures(&video_tex, (Vector2){0, 0}, 0.0, scale_factor,
-                            WHITE);
+    avray_draw_video_textures(&video_tex, (Vector2){0, 0}, 0.0, scale_factor,
+                              WHITE);
 
     if (!stream_paused)
-      dec_update_timelines(&dc);
+      avray_update_timelines(&dc);
 
     /* Vector2 overlay_dims = */
-    dec_draw_debug_overlay(&dc, &video_tex, audio_ts_double, 10, 50);
+    avray_draw_debug_overlay(&dc, &video_tex, audio_ts_double, 10, 50);
 
     if (stream_paused) {
       DrawRectangle(scaled_width / 2 - 30, scaled_height / 2 - 50, 20, 100,
@@ -292,13 +292,13 @@ int main(int argc, char **argv) {
     DrawText(msg, 20, render_height - 80, 25, WHITE);
 
     if (status == RESULT_CHANGED) {
-      dec_seek_to_frame(&dc, new_ts);
+      avray_seek_to_frame(&dc, new_ts);
     }
     EndDrawing();
   }
 
-  dec_free_graphics_objects(&video_tex);
-  dec_shutdown(&dc);
+  avray_free_graphics_objects(&video_tex);
+  avray_shutdown(&dc);
   UnloadAudioStream(stream);
   CloseAudioDevice();
   CloseWindow();
