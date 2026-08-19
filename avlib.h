@@ -46,23 +46,24 @@ typedef struct DecoderContext {
   MutexType dc_mutex; // This mutex is locked when big changes are made to the
                       // other fields
 
+  // Sample rate from audio codec, initialized in avray_open_file().
   unsigned int sample_rate;
+  // frame rate from video codec, initialized in avray_open_file().
   unsigned int frame_rate;
   // unsigned int video_bitrate, audio_bitrate;
+  // Video width from video codec, initialized in avray_open_file().
   unsigned int video_width;
+  // Video height from video codec, initialized in avray_open_file().
   unsigned int video_height;
+  // Pixel format used in the video stream, initialized in avray_open_file().
   enum AVPixelFormat pixel_format;
 
+  // Video and audio time bases, initialized in avray_open_file().
   AVRational video_tb, audio_tb;
-  AVRational audio_time;
-  AVRational video_time;
-  AVRational video_framerate;
-  float delta_time;
-  float max_delta_time;
-  float min_delta_time;
-
+  // Timestamp of the last displayed image, updated in avray_update_textures().
   float video_timest;
-  double duration; // Approximate duration in seconds
+  // Approximate duration in seconds, initialized in avray_open_file().
+  double duration;
 
   TimeLine vbuffer_timeline;
   TimeLine abuffer_timeline;

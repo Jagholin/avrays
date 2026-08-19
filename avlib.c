@@ -200,10 +200,7 @@ int avray_init_decoder(DecoderContext *ctx) {
   if (dc != NULL) {
     return RESULT_ERROR;
   }
-  *ctx = (DecoderContext){.min_delta_time = INFINITY,
-                          .max_delta_time = -INFINITY,
-                          .audio_time = av_make_q(0, 1),
-                          .video_time = av_make_q(0, 1)};
+  *ctx = (DecoderContext){};
   ctx->p = malloc(sizeof(struct DecoderPrivate));
   memset(ctx->p, 0, sizeof(struct DecoderPrivate));
   struct DecoderPrivate *p = ctx->p;
@@ -390,6 +387,11 @@ int avray_open_file(DecoderContext *ctx, const char *file_name) {
            p->ctxv->height, pix_desc->name);
   ctx->video_width = p->ctxv->width;
   ctx->video_height = p->ctxv->height;
+  if (p->ctxv->framerate.num != 0) {
+    ctx->frame_rate = av_q2d(p->ctxv->framerate);
+  } else {
+    ctx->frame_rate = av_q2d(origin_par->framerate);
+  }
 
   p->image_buffer_size =
       av_image_get_buffer_size(p->ctxv->pix_fmt, p->ctxv->width,
@@ -423,7 +425,7 @@ int avray_open_file(DecoderContext *ctx, const char *file_name) {
 
   TraceLog(LOG_DEBUG, "AVRAYS: Codec framerate: %d/%d", p->ctxv->framerate.num,
            p->ctxv->framerate.den);
-  ctx->video_framerate = p->ctxv->framerate;
+  // ctx->video_framerate = p->ctxv->framerate;
   ctx->pixel_format = origin_par->format;
 
   // ctx->state = DS_STARTUP;
@@ -454,18 +456,12 @@ int exec_close_file(DecoderContext *ctx, bool called_as_cleanup) {
   mutex_lock(&p->image_buffer_mtx);
 
   ctx->pixel_format = 0;
-  ctx->video_framerate = AVRAT_ZERO;
+  // ctx->video_framerate = AVRAT_ZERO;
 
   ctx->audio_tb = AVRAT_ZERO;
   ctx->video_tb = AVRAT_ZERO;
   ctx->sample_rate = 0;
-  ctx->audio_time = AVRAT_ZERO;
-  ctx->video_time = AVRAT_ZERO;
   ctx->video_timest = 0;
-
-  ctx->delta_time = 0;
-  ctx->min_delta_time = INFINITY;
-  ctx->max_delta_time = -INFINITY;
 
   ctx->abytes_pulled = ctx->vbytes_pulled = ctx->abytes_written =
       ctx->vbytes_written = 0;
@@ -591,9 +587,9 @@ static int process_video_frame(DecoderContext *ctx) {
                           (uint8_t const *const *)p->fr->data, p->fr->linesize,
                           p->ctxv->pix_fmt, p->ctxv->width, p->ctxv->height, 1);
 
-  ctx->video_time =
+  AVRational video_time =
       av_mul_q(av_make_q(p->fr->best_effort_timestamp, 1), ctx->video_tb);
-  (*(float *)write_loc) = (float)ctx->video_time.num / ctx->video_time.den;
+  (*(float *)write_loc) = (float)av_q2d(video_time);
 
   write_ringbuffer_commit(&p->image_buffer, p->image_buffer_size);
   ctx->vbytes_written += p->image_buffer_size;
@@ -643,7 +639,8 @@ static void init_swr_ifneeded(DecoderContext *ctx) {
     p->fr_audio_target->format = AV_SAMPLE_FMT_FLT;
   }*/
 
-  ctx->sample_rate = p->fr->sample_rate;
+  assert(ctx->sample_rate == p->fr->sample_rate);
+  // ctx->sample_rate = p->fr->sample_rate;
   p->fr_audio_target->sample_rate = ctx->sample_rate;
 
   int result = swr_config_frame(p->swr, p->fr_audio_target, p->fr);

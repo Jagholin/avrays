@@ -9,24 +9,14 @@
 #include <time.h>
 #include <unistd.h>
 
-// #include "avlib_fork.h"
 #include "avlib.h"
-#include "utils.h"
 #define RAYGUI_IMPLEMENTATION
 #include "vendor/raygui/src/raygui.h"
 
 const bool audio_dbg = false;
 double start_clock_time;
 
-// FILE *tempfile;
-
-#define RAILIB_AUDIO_BUFFER_INTERNAL 4096
-#define BUFFER_SIZE (RAILIB_AUDIO_BUFFER_INTERNAL * 4)
-
 AVRational audio_timest = (AVRational){0, 1};
-float cb_timing, min_cb_timing = INFINITY, max_cb_timing = -INFINITY;
-// struct timespec StartTime;
-// bool video_just_started = false;
 DecoderContext dc;
 FILE *log_file;
 
@@ -94,25 +84,13 @@ void audio_cb(void *frame_data, unsigned int frames) {
   // internal function in raudio.c)
   // printf("Requested %lu bytes by audio callback\n", frames * sizeof(float) *
   // 2);
-  struct timespec time_start, time_end;
-  clock_gettime(CLOCK_MONOTONIC, &time_start);
   /*int size = */ avray_pull_audio(&dc, frame_data, frames, &audio_timest);
 
-  // printf("pull audio returned %d\n", size);
   static bool info_given = false;
   if (!info_given) {
     TraceLog(LOG_INFO, "AVRAYS: sample rate: %d", dc.sample_rate);
     info_given = true;
   }
-  // audio_timest += (float)frames / dc.sample_rate;
-  clock_gettime(CLOCK_MONOTONIC, &time_end);
-  long int td = (time_end.tv_sec - time_start.tv_sec) * 1000000000 +
-                time_end.tv_nsec - time_start.tv_nsec;
-  cb_timing = (float)td / 1000000000;
-  if (min_cb_timing > cb_timing)
-    min_cb_timing = cb_timing;
-  if (max_cb_timing < cb_timing)
-    max_cb_timing = cb_timing;
 }
 
 void rescale_window(float *sf, int *sw, int *sh) {
@@ -166,12 +144,10 @@ int main(int argc, char **argv) {
   rescale_window(&scale_factor, &scaled_width, &scaled_height);
   SetWindowState(FLAG_WINDOW_ALWAYS_RUN);
   InitAudioDevice();
-  SetAudioStreamBufferSizeDefault(BUFFER_SIZE);
 
   SetTargetFPS(60);
   RaylibObjects video_tex;
   avray_init_graphics_objects(&dc, &video_tex);
-  // avray_wait_ready(&dc);
 
   AudioStream stream = LoadAudioStream(dc.sample_rate, 32, 2);
   SetAudioStreamCallback(stream, audio_cb);
@@ -179,8 +155,13 @@ int main(int argc, char **argv) {
   PlayAudioStream(stream);
   bool stream_paused = false;
   float video_timest = 0;
+  float filename_display_timeout = 5.0;
 
   while (!WindowShouldClose() && !avray_is_decoder_stopped(&dc)) {
+    // Get window's current dimensions
+    int render_width = GetRenderWidth();
+    int render_height = GetRenderHeight();
+
     mutex_lock(&dc.dc_mutex);
     DecoderState st = dc.state;
     mutex_unlock(&dc.dc_mutex);
@@ -211,6 +192,7 @@ int main(int argc, char **argv) {
       audio_timest = AVRAT_ZERO;
 
       SetWindowTitle(file_name);
+      filename_display_timeout = 5.0;
     }
 
     if (IsKeyPressed(KEY_DOWN)) {
@@ -224,14 +206,14 @@ int main(int argc, char **argv) {
       SetAudioStreamVolume(stream, current_volume);
     }
     if (IsKeyPressed(KEY_LEFT_BRACKET) && file_index >= 2 &&
-        (st == DS_PLAYING || st == DS_STARTUP || st == DS_FINISHED)) {
+        (st == DS_PLAYING || st == DS_STARTUP || st == DS_FILEEOF)) {
       // go to the previous file
       // -2 because the code in if (st==DS_READY) will increment this.
       file_index -= 2;
       avray_close_file(&dc);
     }
     if (IsKeyPressed(KEY_RIGHT_BRACKET) && file_index + 1 < argc &&
-        (st == DS_PLAYING || st == DS_STARTUP || st == DS_FINISHED)) {
+        (st == DS_PLAYING || st == DS_STARTUP || st == DS_FILEEOF)) {
       // file_index will be incremented in the DS_READY handler above
       avray_close_file(&dc);
     }
@@ -278,9 +260,6 @@ int main(int argc, char **argv) {
 
     DrawFPS(10, 10);
     float new_ts = video_timest;
-    // Get window's current dimensions
-    int render_width = GetRenderWidth();
-    int render_height = GetRenderHeight();
 
     int status =
         GuiSliderBar((Rectangle){20, render_height - 50, render_width - 40, 30},
@@ -294,6 +273,11 @@ int main(int argc, char **argv) {
     if (status == RESULT_CHANGED) {
       avray_seek_to_frame(&dc, new_ts);
     }
+
+    if (filename_display_timeout > 0) {
+      DrawText(file_name, 100, 10, 20, WHITE);
+    }
+    filename_display_timeout -= 1. / 60.;
     EndDrawing();
   }
 
