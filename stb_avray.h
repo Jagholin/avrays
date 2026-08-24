@@ -431,7 +431,7 @@ int avray_open_file(DecoderContext *ctx, const char *file_name);
 uint8_t *avray_pull_image(DecoderContext *ctx, float *timestamp);
 void avray_release_image(DecoderContext *ctx);
 int avray_pull_audio(DecoderContext *ctx, void *audio_buffer,
-                     unsigned int frames, volatile AVRational *ts);
+                     unsigned int frames, AVRational *ts);
 void free_decoder_context(DecoderContext *ctx);
 bool avray_is_decoder_stopped(DecoderContext *ctx);
 void avray_seek_to_frame(DecoderContext *ctx, double ts);
@@ -444,7 +444,8 @@ void avray_shutdown(DecoderContext *ctx);
 
 int avray_init_graphics_objects(DecoderContext *ctx, RaylibObjects *objs);
 int avray_free_graphics_objects(RaylibObjects *objs);
-int avray_update_textures(DecoderContext *ctx, RaylibObjects *objs, float ts);
+int avray_update_textures(DecoderContext *ctx, RaylibObjects *objs,
+                          AVRational ts);
 int avray_draw_video_textures(RaylibObjects *objs, Vector2 position,
                               float rotation, float scale_factor, Color tint);
 void timeline_draw_ui(TimeLine tl, int x, int y, int width, int height,
@@ -755,9 +756,16 @@ cleanup:
 }
 
 int avray_open_file(DecoderContext *ctx, const char *file_name) {
+  int result = RESULT_OK;
+  if (ctx->state == DS_FINISHED) {
+    // we still have an open file so we can close it now
+    // this will also switch state to DS_READY
+    result = exec_close_file(ctx, false);
+    ERRCHECK("Unexpected error closing a file");
+  }
   assert(ctx->state == DS_READY);
   struct DecoderPrivate *p = ctx->p;
-  int result = avformat_open_input(&p->fmt_ctx, file_name, NULL, NULL);
+  result = avformat_open_input(&p->fmt_ctx, file_name, NULL, NULL);
   ERRCHECK("Can't open file");
 
   result = avformat_find_stream_info(p->fmt_ctx, NULL);
@@ -1270,7 +1278,7 @@ void avray_release_image(DecoderContext *ctx) {
 }
 
 int avray_pull_audio(DecoderContext *ctx, void *audio_buffer,
-                     unsigned int frames, volatile AVRational *ts) {
+                     unsigned int frames, AVRational *ts) {
   // printf("pull_audio %d called\n", frames);
   struct DecoderPrivate *p = ctx->p;
   if (ctx->state != DS_PLAYING && ctx->state != DS_FILEEOF) {
@@ -1427,10 +1435,6 @@ static void *decode_thread(void *_) {
         }
       }
       // exit(EXIT_FAILURE);
-      break;
-    case DS_FINISHED:
-      // Close the file and return to the READY state
-      exec_close_file(dc, false);
       break;
     default:
       usleep(1000);
@@ -1625,7 +1629,8 @@ int avray_free_graphics_objects(RaylibObjects *objs) {
   return RESULT_OK;
 }
 
-int avray_update_textures(DecoderContext *ctx, RaylibObjects *objs, float ts) {
+int avray_update_textures(DecoderContext *ctx, RaylibObjects *objs,
+                          AVRational ts_rational) {
   // If the TimestampResetSM is active, the ts is probably not reliable
   struct DecoderPrivate *p = ctx->p;
   if (p->timestamp_reset_sm != TR_NONE &&
@@ -1633,6 +1638,7 @@ int avray_update_textures(DecoderContext *ctx, RaylibObjects *objs, float ts) {
     // So we can just return prematurely, no updates needed
     return RESULT_OK;
   }
+  double ts = av_q2d(ts_rational);
   // A special case is when the we are in DS_FILEEOF state, and no more audio
   // data in the buffers are present. In this state, we will have to override
   // video_timest<ts checks so that we can flush the rest of the video frames.
