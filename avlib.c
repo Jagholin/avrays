@@ -1,3 +1,33 @@
+/**********************************************************************************************
+ *
+ *   LICENSE: zlib/libpng
+ *
+ *   avray is licensed under an unmodified zlib/libpng license, which is an
+ * OSI-certified, BSD-like license that allows static linking with closed source
+ * software:
+ *
+ *   Copyright (c) 2026 Jagholin (github.com/Jagholin)
+ *
+ *   This software is provided "as-is", without any express or implied warranty.
+ * In no event will the authors be held liable for any damages arising from the
+ * use of this software.
+ *
+ *   Permission is granted to anyone to use this software for any purpose,
+ * including commercial applications, and to alter it and redistribute it
+ * freely, subject to the following restrictions:
+ *
+ *     1. The origin of this software must not be misrepresented; you must not
+ * claim that you wrote the original software. If you use this software in a
+ * product, an acknowledgment in the product documentation would be appreciated
+ * but is not required.
+ *
+ *     2. Altered source versions must be plainly marked as such, and must not
+ * be misrepresented as being the original software.
+ *
+ *     3. This notice may not be removed or altered from any source
+ * distribution.
+ *
+ **********************************************************************************************/
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/imgutils.h>
@@ -16,25 +46,27 @@ typedef pthread_mutex_t MutexType;
 typedef sem_t SemaphoreType;
 typedef pthread_t ThreadType;
 
-int seek_to_frame(DecoderContext *ctx, double ts);
-int exec_close_file(DecoderContext *ctx, bool called_as_cleanup);
+static int seek_to_frame(DecoderContext *ctx, double ts);
+static int exec_close_file(DecoderContext *ctx, bool called_as_cleanup);
 
-void create_mutex(MutexType *m) { pthread_mutex_init(m, NULL); }
-void create_semaphore(SemaphoreType *s, int init_value) {
+static void create_mutex(MutexType *m) { pthread_mutex_init(m, NULL); }
+static void create_semaphore(SemaphoreType *s, int init_value) {
   sem_init(s, 0, init_value);
 }
-void free_mutex(MutexType *m) { pthread_mutex_destroy(m); }
-void free_semaphore(SemaphoreType *s) {
+static void free_mutex(MutexType *m) { pthread_mutex_destroy(m); }
+static void free_semaphore(SemaphoreType *s) {
   sem_close(s);
   sem_destroy(s);
 }
 
-void semaphore_wait(SemaphoreType *s) { sem_wait(s); }
-void semaphore_incr(SemaphoreType *s) { sem_post(s); }
-void semaphore_get_value(SemaphoreType *s, int *val) { sem_getvalue(s, val); }
+static void semaphore_wait(SemaphoreType *s) { sem_wait(s); }
+static void semaphore_incr(SemaphoreType *s) { sem_post(s); }
+static void semaphore_get_value(SemaphoreType *s, int *val) {
+  sem_getvalue(s, val);
+}
 void mutex_lock(MutexType *m) { pthread_mutex_lock(m); }
 void mutex_unlock(MutexType *m) { pthread_mutex_unlock(m); }
-void thread_create(ThreadType *t, void *(*thread_proc)(void *)) {
+static void thread_create(ThreadType *t, void *(*thread_proc)(void *)) {
   pthread_create(t, NULL, thread_proc, NULL);
 }
 
@@ -93,7 +125,7 @@ struct DecoderPrivate {
   // SemaphoreType startup_sem;
 };
 
-const char *state_str(DecoderState st) {
+static const char *state_str(DecoderState st) {
   switch (st) {
   case DS_READY:
     return "READY";
@@ -116,7 +148,7 @@ const char *state_str(DecoderState st) {
   }
 }
 
-void switch_dec_state(DecoderContext *ctx, DecoderState newState) {
+static void switch_dec_state(DecoderContext *ctx, DecoderState newState) {
   TraceLog(LOG_INFO, "AVRAYS: Switching to new state: %s", state_str(newState));
   ctx->state = newState;
 }
@@ -142,14 +174,15 @@ struct CloseFileCommand {
   struct DecoderCommand cmd;
 };
 
-int seek_command_dispatch(DecoderContext *ctx, struct DecoderCommand *cmd) {
+static int seek_command_dispatch(DecoderContext *ctx,
+                                 struct DecoderCommand *cmd) {
   struct SeekCommand *c = (struct SeekCommand *)cmd;
   return seek_to_frame(ctx, c->target);
 }
 
-void free_seek_command(struct DecoderCommand *cmd) { free(cmd); }
+static void free_seek_command(struct DecoderCommand *cmd) { free(cmd); }
 
-struct SeekCommand *make_seek_command(double target) {
+static struct SeekCommand *make_seek_command(double target) {
   struct SeekCommand *result = malloc(sizeof(struct SeekCommand));
   result->target = target;
   result->cmd.c_type = COMMAND_SEEK;
@@ -159,13 +192,14 @@ struct SeekCommand *make_seek_command(double target) {
   return result;
 }
 
-int close_command_dispatch(DecoderContext *ctx, struct DecoderCommand *_) {
+static int close_command_dispatch(DecoderContext *ctx,
+                                  struct DecoderCommand *_) {
   return exec_close_file(ctx, false);
 }
 
-void free_close_command(struct DecoderCommand *cmd) { free(cmd); }
+static void free_close_command(struct DecoderCommand *cmd) { free(cmd); }
 
-struct CloseFileCommand *make_close_file_command() {
+static struct CloseFileCommand *make_close_file_command() {
   struct CloseFileCommand *result = malloc(sizeof(struct CloseFileCommand));
   result->cmd.c_type = COMMAND_CLOSE;
   result->cmd.dispatch = &close_command_dispatch;
@@ -174,8 +208,8 @@ struct CloseFileCommand *make_close_file_command() {
   return result;
 }
 
-void add_command_to_q(LinkedQueue **q, struct DecoderCommand **cmd,
-                      bool collapse) {
+static void add_command_to_q(LinkedQueue **q, struct DecoderCommand **cmd,
+                             bool collapse) {
   if (collapse) {
     LinkedQueue *mq = *q;
     while (mq->pnext) {
@@ -242,7 +276,7 @@ cleanup:
   return RESULT_ERROR;
 }
 
-int time_probe_seek_pts(DecoderContext *ctx, int64_t *presult) {
+static int time_probe_seek_pts(DecoderContext *ctx, int64_t *presult) {
   struct DecoderPrivate *p = ctx->p;
 
   int64_t timed = AV_TIME_BASE;
@@ -439,7 +473,7 @@ cleanup:
   return result;
 }
 
-int exec_close_file(DecoderContext *ctx, bool called_as_cleanup) {
+static int exec_close_file(DecoderContext *ctx, bool called_as_cleanup) {
   if (ctx->state != DS_STARTUP && ctx->state != DS_PLAYING &&
       ctx->state != DS_FINISHED && ctx->state != DS_FILEEOF &&
       !called_as_cleanup) {
@@ -762,7 +796,7 @@ cleanup:
   return result;
 }
 
-void try_unlock_decoder_sem(DecoderContext *ctx) {
+static void try_unlock_decoder_sem(DecoderContext *ctx) {
   int sem_value;
   struct DecoderPrivate *p = ctx->p;
   semaphore_get_value(&p->sem, &sem_value);
@@ -775,7 +809,7 @@ void try_unlock_decoder_sem(DecoderContext *ctx) {
   }
 }
 
-void try_move_to_finished_state(DecoderContext *ctx) {
+static void try_move_to_finished_state(DecoderContext *ctx) {
   if (ctx->state != DS_FILEEOF)
     return;
   if (ringbuffer_len(&ctx->p->audio_buffer) == 0 &&
@@ -847,7 +881,7 @@ int avray_pull_audio(DecoderContext *ctx, void *audio_buffer,
   return result;
 }
 
-int seek_to_frame(DecoderContext *ctx, double ts) {
+static int seek_to_frame(DecoderContext *ctx, double ts) {
   int64_t time = floor(ts * AV_TIME_BASE);
   int64_t time_dt = AV_TIME_BASE;
 
@@ -933,7 +967,7 @@ void avray_close_file(DecoderContext *ctx) {
   mutex_unlock(&p->command_q_mtx);
 }
 
-void *decode_thread(void *_) {
+static void *decode_thread(void *_) {
   int result = 0;
   static int call_count = 0;
   // wait for dc to be populated
