@@ -103,8 +103,6 @@ typedef struct DecoderContext {
   DecoderState state;
 } DecoderContext;
 
-// extern FILE *tempfile;
-
 #define RESULT_ERROR -1
 #define RESULT_OK 0
 #define RESULT_STALL 1
@@ -134,7 +132,8 @@ int avray_update_textures(DecoderContext *ctx, RaylibObjects *objs, float ts);
 int avray_draw_video_textures(RaylibObjects *objs, Vector2 position,
                               float rotation, float scale_factor, Color tint);
 void timeline_draw_ui(TimeLine tl, int x, int y, int width, int height,
-                      unsigned int max);
+                      unsigned int max, bool draw_background);
 Vector2 avray_draw_debug_overlay(DecoderContext *ctx, RaylibObjects *objs,
-                                 double audio_ts, int x, int y);
+                                 double audio_ts, int x, int y, Vector2 *pdims,
+                                 bool draw_background);
 #endif // !AVLIB_H

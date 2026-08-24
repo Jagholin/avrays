@@ -82,8 +82,6 @@ void audio_cb(void *frame_data, unsigned int frames) {
   // the amount of data pulled by this function will always be no more than 4096
   // bytes (hardcoded in raylib, see ReadAudioBufferFramesInMixingFormat
   // internal function in raudio.c)
-  // printf("Requested %lu bytes by audio callback\n", frames * sizeof(float) *
-  // 2);
   /*int size = */ avray_pull_audio(&dc, frame_data, frames, &audio_timest);
 
   static bool info_given = false;
@@ -156,6 +154,7 @@ int main(int argc, char **argv) {
   bool stream_paused = false;
   float video_timest = 0;
   float filename_display_timeout = 5.0;
+  Vector2 overlay_dims = {};
 
   while (!WindowShouldClose() && !avray_is_decoder_stopped(&dc)) {
     // Get window's current dimensions
@@ -249,7 +248,8 @@ int main(int argc, char **argv) {
       avray_update_timelines(&dc);
 
     /* Vector2 overlay_dims = */
-    avray_draw_debug_overlay(&dc, &video_tex, audio_ts_double, 10, 50);
+    avray_draw_debug_overlay(&dc, &video_tex, audio_ts_double, 10, 50,
+                             &overlay_dims, true);
 
     if (stream_paused) {
       DrawRectangle(scaled_width / 2 - 30, scaled_height / 2 - 50, 20, 100,

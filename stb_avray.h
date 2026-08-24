@@ -1,33 +1,459 @@
 /**********************************************************************************************
- *
- *   LICENSE: zlib/libpng
- *
- *   avray is licensed under an unmodified zlib/libpng license, which is an
- * OSI-certified, BSD-like license that allows static linking with closed source
- * software:
- *
- *   Copyright (c) 2026 Jagholin (github.com/Jagholin)
- *
- *   This software is provided "as-is", without any express or implied warranty.
- * In no event will the authors be held liable for any damages arising from the
- * use of this software.
- *
- *   Permission is granted to anyone to use this software for any purpose,
- * including commercial applications, and to alter it and redistribute it
- * freely, subject to the following restrictions:
- *
- *     1. The origin of this software must not be misrepresented; you must not
- * claim that you wrote the original software. If you use this software in a
- * product, an acknowledgment in the product documentation would be appreciated
- * but is not required.
- *
- *     2. Altered source versions must be plainly marked as such, and must not
- * be misrepresented as being the original software.
- *
- *     3. This notice may not be removed or altered from any source
- * distribution.
- *
- **********************************************************************************************/
+*
+*   LICENSE: zlib/libpng
+*
+*   avray is licensed under an unmodified zlib/libpng license, which is an
+* OSI-certified, BSD-like license that allows static linking with closed source
+* software:
+*
+*   Copyright (c) 2026 Jagholin (github.com/Jagholin)
+*
+*   This software is provided "as-is", without any express or implied warranty.
+* In no event will the authors be held liable for any damages arising from the
+* use of this software.
+*
+*   Permission is granted to anyone to use this software for any purpose,
+* including commercial applications, and to alter it and redistribute it
+* freely, subject to the following restrictions:
+*
+*     1. The origin of this software must not be misrepresented; you must not
+* claim that you wrote the original software. If you use this software in a
+* product, an acknowledgment in the product documentation would be appreciated
+* but is not required.
+*
+*     2. Altered source versions must be plainly marked as such, and must not
+* be misrepresented as being the original software.
+*
+*     3. This notice may not be removed or altered from any source
+* distribution.
+*
+**********************************************************************************************/
+#ifndef AVRAY_STB
+#define AVRAY_STB
+#ifndef UTILS_H
+#define UTILS_H
+#include <GL/gl.h>
+#include <assert.h>
+#include <libavutil/mem.h>
+#include <pthread.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#define UTILFUNC [[maybe_unused]] static inline
+
+typedef struct CleanupStack {
+  struct CleanupStack *pnext;
+  void *what;
+  void (*cb)(void *);
+} CleanupStack;
+static CleanupStack *cs = NULL;
+
+static inline void cleanup_mem_fn(void *d) { free(d); }
+UTILFUNC void cleanup_push_mem(void *memloc) {
+  CleanupStack *newcs = malloc(sizeof(CleanupStack));
+  *newcs = (CleanupStack){.what = memloc, .cb = &cleanup_mem_fn, .pnext = cs};
+  cs = newcs;
+}
+UTILFUNC void run_cleanups() {
+  while (cs) {
+    CleanupStack *t = cs;
+    cs->cb(cs->what);
+    cs = cs->pnext;
+    free(t);
+  }
+}
+
+typedef struct String {
+  char *str;
+  size_t len;
+  size_t space;
+} String;
+
+UTILFUNC String make_string() {
+  char *temp = malloc(256);
+  temp[0] = '\0';
+
+  return (String){.str = temp, .len = 0, .space = 256};
+}
+
+UTILFUNC void free_string(String s) { free(s.str); }
+
+UTILFUNC void concat_string_chars(String *s, char *src) {
+  size_t new_len = s->len + strlen(src);
+  if (new_len >= s->space) {
+    size_t new_space = s->space * 2;
+    while (new_len >= new_space) {
+      new_space *= 2;
+    }
+    s->str = realloc(s->str, new_space);
+    s->space = new_space;
+  }
+  strcat(s->str, src);
+  s->len = new_len;
+}
+
+typedef struct RingBuffer {
+  uint8_t *buffer;
+  size_t buf_size;
+  ptrdiff_t read_head, write_head;
+} RingBuffer;
+
+UTILFUNC RingBuffer make_ringbuffer(size_t len) {
+  uint8_t *temp = av_malloc(len);
+  return (RingBuffer){.buffer = temp, .buf_size = len};
+}
+
+UTILFUNC size_t ringbuffer_len(RingBuffer *rb) {
+  // The size is the distance from read head to write head
+  if (rb->write_head >= rb->read_head)
+    return rb->write_head - rb->read_head;
+  // rb->write_head < rb->read_head
+  size_t result = rb->buf_size - rb->read_head;
+  result += rb->write_head;
+  return result;
+}
+
+UTILFUNC size_t write_to_ringbuffer(RingBuffer *rb, uint8_t *what, size_t len) {
+  // calculate capacity
+  size_t len_before = ringbuffer_len(rb);
+  size_t capacity = 0;
+  if (rb->write_head >= rb->read_head) {
+    capacity = rb->buf_size - rb->write_head;
+    capacity += rb->read_head;
+  } else {
+    capacity = rb->read_head - rb->write_head;
+  }
+
+  if (capacity == 0) {
+    return 0;
+  }
+
+  if (capacity <= len)
+    return 0;
+  // len = capacity;
+  if (len + rb->write_head > rb->buf_size) {
+    // we need to separate into 2 chunks
+    // first chunk is to the end of the buffer, lets calculate its size
+    ptrdiff_t first_ch_len = rb->buf_size - rb->write_head;
+    ptrdiff_t second_ch_len = len - first_ch_len;
+    assert(second_ch_len < rb->read_head);
+    memcpy(rb->buffer + rb->write_head, what, first_ch_len);
+    memcpy(rb->buffer, what + first_ch_len, second_ch_len);
+    rb->write_head = second_ch_len;
+    size_t len_after = ringbuffer_len(rb);
+    assert(len_after - len_before == len);
+    return len;
+  } else {
+    memcpy(rb->buffer + rb->write_head, what, len);
+    rb->write_head += len;
+    size_t len_after = ringbuffer_len(rb);
+    assert(len_after - len_before == len);
+    return len;
+  }
+}
+
+UTILFUNC uint8_t *write_ringbuffer_chunk_nocommit(RingBuffer *rb, size_t len) {
+  assert(rb->buf_size % len == 0);
+  if (rb->write_head + len > rb->buf_size) {
+    return NULL;
+  }
+
+  // dont run past read_head
+  if (rb->read_head > rb->write_head && rb->write_head + len >= rb->read_head) {
+    return NULL;
+  }
+
+  if (rb->write_head + len == rb->buf_size && rb->read_head == 0) {
+    return NULL;
+  }
+
+  return rb->buffer + rb->write_head;
+}
+
+UTILFUNC void write_ringbuffer_commit(RingBuffer *rb, size_t len) {
+  size_t len_before = ringbuffer_len(rb);
+  rb->write_head += len;
+  assert(rb->write_head <= rb->buf_size);
+  if (rb->write_head == rb->buf_size)
+    rb->write_head = 0;
+  size_t len_after = ringbuffer_len(rb);
+  assert(len_after - len_before == len);
+}
+
+UTILFUNC uint8_t *read_ringbuffer_chunk(RingBuffer *rb, size_t len) {
+  size_t len_before = ringbuffer_len(rb);
+  // this function only works if reading doesn't cross rb's boundary
+  assert(rb->buf_size % len == 0);
+  if (rb->read_head + len > rb->buf_size) {
+    return NULL;
+  }
+
+  // If we run past write_head, we don't have enough data
+  if (rb->write_head >= rb->read_head && rb->read_head + len > rb->write_head) {
+    return NULL;
+  }
+
+  uint8_t *result = rb->buffer + rb->read_head;
+  rb->read_head += len;
+  assert(rb->read_head <= rb->buf_size);
+  if (rb->read_head == rb->buf_size)
+    rb->read_head = 0;
+  size_t len_after = ringbuffer_len(rb);
+  assert(len_before - len_after == len);
+  return result;
+}
+
+UTILFUNC size_t read_ringbuffer(RingBuffer *rb, uint8_t *dest, size_t len) {
+  size_t len_before = ringbuffer_len(rb);
+  size_t data_available = 0;
+  if (rb->write_head >= rb->read_head) {
+    data_available += rb->write_head - rb->read_head;
+  } else {
+    data_available += rb->buf_size - rb->read_head;
+    data_available += rb->write_head;
+  }
+
+  if (data_available < len) {
+    // return 0;
+    len = data_available;
+  }
+  if (rb->read_head + len > rb->buf_size) {
+    size_t first_ch_len = rb->buf_size - rb->read_head;
+    size_t second_ch_len = len - first_ch_len;
+    memcpy(dest, rb->buffer + rb->read_head, first_ch_len);
+    memcpy(dest + first_ch_len, rb->buffer, second_ch_len);
+    rb->read_head = second_ch_len;
+  } else {
+    memcpy(dest, rb->buffer + rb->read_head, len);
+    rb->read_head += len;
+  }
+  size_t len_after = ringbuffer_len(rb);
+  assert(len_before - len_after == len);
+  return len;
+}
+
+UTILFUNC void free_ringbuffer(RingBuffer *rb) {
+  if (rb->buffer) {
+    av_free(rb->buffer);
+    *rb = (RingBuffer){0};
+  }
+}
+
+UTILFUNC void ringbuffer_flush(RingBuffer *rb) {
+  rb->read_head = 0;
+  rb->write_head = 0;
+}
+
+typedef struct TimeLine {
+  void *buffer;
+  size_t elem_size;
+  unsigned int cursor;
+  size_t len;
+} TimeLine;
+
+UTILFUNC TimeLine make_timeline(size_t elem_size, size_t length) {
+  void *buf = malloc(elem_size * length);
+  memset(buf, 0, elem_size * length);
+  return (TimeLine){buf, elem_size, 0, length};
+}
+
+UTILFUNC void *timeline_push(TimeLine *self) {
+  void *result = self->buffer + self->elem_size * self->cursor;
+  self->cursor += 1;
+  if (self->cursor >= self->len) {
+    self->cursor = 0;
+  }
+  return result;
+}
+
+UTILFUNC void *timeline_get(TimeLine *self, unsigned int i) {
+  size_t off = self->cursor + i;
+  if (off >= self->len)
+    off -= self->len;
+  if (off >= self->len)
+    return NULL;
+  return self->buffer + self->elem_size * off;
+}
+
+UTILFUNC void free_timeline(TimeLine *self) {
+  free(self->buffer);
+  self->buffer = NULL;
+}
+
+typedef struct LinkedQueue {
+  struct LinkedQueue *pnext;
+  void *data;
+} LinkedQueue;
+
+UTILFUNC LinkedQueue *make_queue() {
+  LinkedQueue *result = calloc(1, sizeof(LinkedQueue));
+  return result;
+}
+
+UTILFUNC LinkedQueue *queue_add(LinkedQueue *q, void *data) {
+  LinkedQueue *left = NULL, *right = q;
+  while (right->pnext) {
+    left = right;
+    right = right->pnext;
+  }
+  LinkedQueue *new_link = make_queue();
+  new_link->data = data;
+  new_link->pnext = right;
+  if (left) {
+    left->pnext = new_link;
+    return q;
+  } else {
+    return new_link;
+  }
+}
+
+UTILFUNC void *queue_pop(LinkedQueue **q) {
+  void *result = (*q)->data;
+  LinkedQueue *head = *q;
+  if (head->pnext == NULL) {
+    return NULL;
+  }
+  (*q) = head->pnext;
+  free(head);
+  return result;
+}
+
+UTILFUNC void queue_free(LinkedQueue *q) {
+  while (q) {
+    LinkedQueue *t = q;
+    q = q->pnext;
+    if (t->data) {
+      free(t->data);
+    }
+    free(t);
+  }
+}
+
+#define ERRCHECK(...)                                                          \
+  if (result < 0) {                                                            \
+    TraceLog(LOG_ERROR, __VA_ARGS__);                                          \
+    goto cleanup;                                                              \
+  }
+#define ERRCHECK2(val, ...)                                                    \
+  if (!(val)) {                                                                \
+    TraceLog(LOG_ERROR, __VA_ARGS__);                                          \
+    goto cleanup;                                                              \
+  }
+
+#endif // !UTILS_H
+#ifndef AVLIB_H
+#define AVLIB_H
+
+#include <libavutil/pixfmt.h>
+#include <libavutil/rational.h>
+#include <pthread.h>
+#include <raylib.h>
+#include <semaphore.h>
+#include <stdbool.h>
+
+#define AVRAT_ZERO (AVRational){0, 1};
+
+struct DecoderPrivate;
+
+typedef enum DecoderState {
+  DS_UNINIT = 0, // default ZERO value
+  DS_READY,      // after call to avray_init_decoder
+  DS_STARTUP,    // filling buffers before playback
+  DS_PLAYING,    // actively playing the video
+  DS_FILEEOF,    // video file at EOF, but buffers aren't empty yet
+  DS_FINISHED,   // File at EOF and buffers are empty. Decoder thread transfers
+                 // this state to DS_READY.
+  DS_SHUTDOWN,   // after call to avray_shutdown
+  DS_ERROR = 100,
+} DecoderState;
+
+typedef struct RaylibObjects {
+  Shader video_shader;
+  Texture2D tex_luma, tex_u, tex_v;
+  int y_location, u_location, v_location;
+  unsigned int frame_counter;
+  unsigned int bytespp;
+} RaylibObjects;
+
+typedef pthread_mutex_t MutexType;
+typedef sem_t SemaphoreType;
+typedef pthread_t ThreadType;
+
+void mutex_lock(MutexType *m);
+void mutex_unlock(MutexType *m);
+
+typedef struct DecoderContext {
+  struct DecoderPrivate *p;
+
+  MutexType dc_mutex; // This mutex is locked when big changes are made to the
+                      // other fields
+
+  // Sample rate from audio codec, initialized in avray_open_file().
+  unsigned int sample_rate;
+  // frame rate from video codec, initialized in avray_open_file().
+  unsigned int frame_rate;
+  // unsigned int video_bitrate, audio_bitrate;
+  // Video width from video codec, initialized in avray_open_file().
+  unsigned int video_width;
+  // Video height from video codec, initialized in avray_open_file().
+  unsigned int video_height;
+  // Pixel format used in the video stream, initialized in avray_open_file().
+  enum AVPixelFormat pixel_format;
+
+  // Video and audio time bases, initialized in avray_open_file().
+  AVRational video_tb, audio_tb;
+  // Timestamp of the last displayed image, updated in avray_update_textures().
+  float video_timest;
+  // Approximate duration in seconds, initialized in avray_open_file().
+  double duration;
+
+  TimeLine vbuffer_timeline;
+  TimeLine abuffer_timeline;
+  unsigned long int abytes_pulled, vbytes_pulled;
+  unsigned long int abytes_written, vbytes_written;
+
+  DecoderState state;
+} DecoderContext;
+
+#define RESULT_ERROR -1
+#define RESULT_OK 0
+#define RESULT_STALL 1
+#define RESULT_EOF 2
+int time_to_str(double seconds, char *buf, size_t n);
+
+int avray_init_decoder(DecoderContext *ctx);
+int avray_open_file(DecoderContext *ctx, const char *file_name);
+// int avray_continue_decoding(DecoderContext *ctx);
+uint8_t *avray_pull_image(DecoderContext *ctx, float *timestamp);
+void avray_release_image(DecoderContext *ctx);
+int avray_pull_audio(DecoderContext *ctx, void *audio_buffer,
+                     unsigned int frames, volatile AVRational *ts);
+void free_decoder_context(DecoderContext *ctx);
+bool avray_is_decoder_stopped(DecoderContext *ctx);
+void avray_seek_to_frame(DecoderContext *ctx, double ts);
+void avray_close_file(DecoderContext *ctx);
+
+void avray_update_timelines(DecoderContext *ctx);
+void avray_initialize();
+void avray_shutdown(DecoderContext *ctx);
+// void avray_wait_ready(DecoderContext *ctx);
+
+int avray_init_graphics_objects(DecoderContext *ctx, RaylibObjects *objs);
+int avray_free_graphics_objects(RaylibObjects *objs);
+int avray_update_textures(DecoderContext *ctx, RaylibObjects *objs, float ts);
+int avray_draw_video_textures(RaylibObjects *objs, Vector2 position,
+                              float rotation, float scale_factor, Color tint);
+void timeline_draw_ui(TimeLine tl, int x, int y, int width, int height,
+                      unsigned int max, bool draw_background);
+Vector2 avray_draw_debug_overlay(DecoderContext *ctx, RaylibObjects *objs,
+                                 double audio_ts, int x, int y, Vector2 *pdims,
+                                 bool draw_background);
+#endif // !AVLIB_H
+#ifdef AVRAY_IMPLEMENTATION
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/imgutils.h>
@@ -36,8 +462,6 @@
 #include <pthread.h>
 #include <semaphore.h>
 
-#include "avlib.h"
-#include "utils.h"
 
 // Size of the video buffer if the framerate is not available
 #define RING_FRAMES 30
@@ -1383,3 +1807,5 @@ Vector2 avray_draw_debug_overlay(DecoderContext *ctx, RaylibObjects *objs,
     *pdims = dims;
   return dims;
 }
+#endif // AVRAY_IMPLEMENTATION
+#endif // AVRAY_STB
