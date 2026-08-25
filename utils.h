@@ -334,11 +334,25 @@ UTILFUNC void queue_free(LinkedQueue *q) {
 #define ERRCHECK(...)                                                          \
   if (result < 0) {                                                            \
     TraceLog(LOG_ERROR, __VA_ARGS__);                                          \
+    result = RESULT_ERROR;                                                     \
     goto cleanup;                                                              \
   }
 #define ERRCHECK2(val, ...)                                                    \
   if (!(val)) {                                                                \
     TraceLog(LOG_ERROR, __VA_ARGS__);                                          \
+    result = RESULT_ERROR;                                                     \
+    goto cleanup;                                                              \
+  }
+#define ERRCHECKR(res, ...)                                                    \
+  if (result < 0) {                                                            \
+    TraceLog(LOG_ERROR, __VA_ARGS__);                                          \
+    result = (res);                                                            \
+    goto cleanup;                                                              \
+  }
+#define ERRCHECK2R(val, res, ...)                                              \
+  if (!(val)) {                                                                \
+    TraceLog(LOG_ERROR, __VA_ARGS__);                                          \
+    result = (res);                                                            \
     goto cleanup;                                                              \
   }
 

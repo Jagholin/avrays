@@ -341,6 +341,9 @@ int avray_open_file(DecoderContext *ctx, const char *file_name) {
   assert(ctx->state == DS_READY);
   struct DecoderPrivate *p = ctx->p;
   result = avformat_open_input(&p->fmt_ctx, file_name, NULL, NULL);
+  if (result != 0) {
+    return RESULT_CANT_OPEN;
+  }
   ERRCHECK("Can't open file");
 
   result = avformat_find_stream_info(p->fmt_ctx, NULL);
@@ -348,10 +351,10 @@ int avray_open_file(DecoderContext *ctx, const char *file_name) {
 
   p->video_stream =
       av_find_best_stream(p->fmt_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
-  ERRCHECK2(p->video_stream >= 0, "Cant find video stream");
+  ERRCHECK2R(p->video_stream >= 0, RESULT_CANT_OPEN, "Cant find video stream");
   p->audio_stream =
       av_find_best_stream(p->fmt_ctx, AVMEDIA_TYPE_AUDIO, -1, -1, NULL, 0);
-  ERRCHECK2(p->audio_stream >= 0, "Cant find audio stream");
+  ERRCHECK2R(p->audio_stream >= 0, RESULT_CANT_OPEN, "Cant find audio stream");
   AVCodecParameters *origin_par =
       p->fmt_ctx->streams[p->video_stream]->codecpar;
   AVCodecParameters *origin_par_audio =
@@ -1316,7 +1319,7 @@ void timeline_draw_ui(TimeLine tl, int x, int y, int width, int height,
 }
 
 Vector2 avray_draw_debug_overlay(DecoderContext *ctx, RaylibObjects *objs,
-                                 double audio_ts_double, int x, int y,
+                                 AVRational audio_ts, int x, int y,
                                  Vector2 *pdims, bool draw_background) {
   struct DecoderPrivate *p = ctx->p;
   const unsigned int LINEHEIGHT = 25;
@@ -1339,6 +1342,7 @@ Vector2 avray_draw_debug_overlay(DecoderContext *ctx, RaylibObjects *objs,
     dims.x = 300;
 
   char msg[128], msga[128];
+  double audio_ts_double = av_q2d(audio_ts);
   snprintf(msg, sizeof(msg), "atime: %.2f vtime: %.2f d: %.2f f: %d",
            audio_ts_double, ctx->video_timest,
            fabs(audio_ts_double - ctx->video_timest), objs->frame_counter);

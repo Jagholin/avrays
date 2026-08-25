@@ -107,6 +107,7 @@ typedef struct DecoderContext {
 #define RESULT_OK 0
 #define RESULT_STALL 1
 #define RESULT_EOF 2
+#define RESULT_CANT_OPEN 3
 int time_to_str(double seconds, char *buf, size_t n);
 
 int avray_init_decoder(DecoderContext *ctx);
@@ -135,6 +136,6 @@ int avray_draw_video_textures(RaylibObjects *objs, Vector2 position,
 void timeline_draw_ui(TimeLine tl, int x, int y, int width, int height,
                       unsigned int max, bool draw_background);
 Vector2 avray_draw_debug_overlay(DecoderContext *ctx, RaylibObjects *objs,
-                                 double audio_ts, int x, int y, Vector2 *pdims,
-                                 bool draw_background);
+                                 AVRational audio_ts, int x, int y,
+                                 Vector2 *pdims, bool draw_background);
 #endif // !AVLIB_H

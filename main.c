@@ -91,9 +91,17 @@ void audio_cb(void *frame_data, unsigned int frames) {
   }
 }
 
-void rescale_window(float *sf, int *sw, int *sh) {
+void rescale_window(float *sf, int *sw, int *sh, Vector2 *displacement,
+                    bool fullscreen) {
   unsigned int scaled_width = Clamp(dc.video_width, 100, 2000);
   unsigned int scaled_height = Clamp(dc.video_height, 100, 1200);
+
+  if (fullscreen) {
+    // We just take monitor width/height and apply them instead
+    scaled_width = GetMonitorWidth(GetCurrentMonitor());
+    scaled_height = GetMonitorHeight(GetCurrentMonitor());
+  }
+
   float scale_factor_w = (float)scaled_width / dc.video_width;
   float scale_factor_h = (float)scaled_height / dc.video_height;
   float scale_factor = scale_factor_w;
@@ -107,7 +115,33 @@ void rescale_window(float *sf, int *sw, int *sh) {
   if (sh)
     *sh = scaled_height;
 
+  float displayed_width = dc.video_width * scale_factor;
+  float displayed_height = dc.video_height * scale_factor;
+
+  // Calculate letterboxing displacement
+  if (fabsf(displayed_width - scaled_width) >
+      fabsf(displayed_height - scaled_height)) {
+    displacement->x = 0.5 * (scaled_width - displayed_width);
+    displacement->y = 0;
+  } else {
+    displacement->x = 0;
+    displacement->y = 0.5 * (scaled_height - displayed_height);
+  }
+
   SetWindowSize(scaled_width, scaled_height);
+}
+
+void remove_file_from_argv(char **argv, int *len, int at) {
+  for (; at < *len - 1; at++) {
+    argv[at] = argv[at + 1];
+  }
+  *len -= 1;
+}
+
+void print_argv(char **argv, int argc) {
+  for (int i = 0; i < argc; i++) {
+    printf("%d: %s\n", i, argv[i]);
+  }
 }
 
 int main(int argc, char **argv) {
@@ -131,15 +165,22 @@ int main(int argc, char **argv) {
     exit(EXIT_FAILURE);
 
   unsigned int file_index = 1;
+  int current_argc = argc;
   char *file_name = argv[file_index];
-  result = avray_open_file(&dc, file_name);
+  while ((result = avray_open_file(&dc, file_name)) == RESULT_CANT_OPEN) {
+    remove_file_from_argv(argv, &current_argc, file_index);
+    // print_argv(argv, current_argc);
+    file_name = argv[file_index];
+  }
   if (result != 0)
     exit(EXIT_FAILURE);
 
   float scale_factor = 1.0;
   int scaled_width = 1, scaled_height = 1;
+  Vector2 letterbox = {};
   InitWindow(1024, 768, file_name);
-  rescale_window(&scale_factor, &scaled_width, &scaled_height);
+  rescale_window(&scale_factor, &scaled_width, &scaled_height, &letterbox,
+                 false);
   SetWindowState(FLAG_WINDOW_ALWAYS_RUN);
   InitAudioDevice();
 
@@ -155,6 +196,9 @@ int main(int argc, char **argv) {
   float video_timest = 0;
   float filename_display_timeout = 5.0;
   Vector2 overlay_dims = {};
+  bool show_overlay = false;
+  double old_mouse_press = -INFINITY;
+  bool window_is_fullscreen = false;
 
   while (!WindowShouldClose() && !avray_is_decoder_stopped(&dc)) {
     // Get window's current dimensions
@@ -165,10 +209,10 @@ int main(int argc, char **argv) {
     DecoderState st = dc.state;
     mutex_unlock(&dc.dc_mutex);
 
-    if (st == DS_READY) {
+    if (st == DS_READY || st == DS_FINISHED) {
       // Open the next file
       file_index++;
-      if (file_index >= argc) {
+      if (file_index >= current_argc) {
         // No more files in queue
         break;
       }
@@ -177,9 +221,17 @@ int main(int argc, char **argv) {
       avray_free_graphics_objects(&video_tex);
 
       file_name = argv[file_index];
-      if (avray_open_file(&dc, file_name) != RESULT_OK)
+      while ((result = avray_open_file(&dc, file_name)) == RESULT_CANT_OPEN) {
+        remove_file_from_argv(argv, &current_argc, file_index);
+        // print_argv(argv, current_argc);
+        if (file_index >= current_argc)
+          break;
+        file_name = argv[file_index];
+      }
+      if (result != RESULT_OK)
         break;
-      rescale_window(&scale_factor, &scaled_width, &scaled_height);
+      rescale_window(&scale_factor, &scaled_width, &scaled_height, &letterbox,
+                     window_is_fullscreen);
       avray_init_graphics_objects(&dc, &video_tex);
 
       stream = LoadAudioStream(dc.sample_rate, 32, 2);
@@ -205,13 +257,14 @@ int main(int argc, char **argv) {
       SetAudioStreamVolume(stream, current_volume);
     }
     if (IsKeyPressed(KEY_LEFT_BRACKET) && file_index >= 2 &&
-        (st == DS_PLAYING || st == DS_STARTUP || st == DS_FILEEOF)) {
+        (st == DS_PLAYING || st == DS_STARTUP || st == DS_FILEEOF ||
+         st == DS_FINISHED)) {
       // go to the previous file
       // -2 because the code in if (st==DS_READY) will increment this.
       file_index -= 2;
       avray_close_file(&dc);
     }
-    if (IsKeyPressed(KEY_RIGHT_BRACKET) && file_index + 1 < argc &&
+    if (IsKeyPressed(KEY_RIGHT_BRACKET) && file_index + 1 < current_argc &&
         (st == DS_PLAYING || st == DS_STARTUP || st == DS_FILEEOF)) {
       // file_index will be incremented in the DS_READY handler above
       avray_close_file(&dc);
@@ -233,23 +286,42 @@ int main(int argc, char **argv) {
       if (video_timest != 0)
         avray_seek_to_frame(&dc, video_timest - 20.0);
     }
+    if (IsKeyPressed(KEY_G)) {
+      show_overlay = !show_overlay;
+    }
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+      double new_press = GetTime();
+      if (new_press - old_mouse_press < 0.3) {
+        // we have a double click
+        window_is_fullscreen = !window_is_fullscreen;
+        if (window_is_fullscreen) {
+          SetWindowState(FLAG_WINDOW_UNDECORATED |
+                         FLAG_BORDERLESS_WINDOWED_MODE);
+        } else {
+          ClearWindowState(FLAG_WINDOW_UNDECORATED |
+                           FLAG_BORDERLESS_WINDOWED_MODE);
+        }
+        rescale_window(&scale_factor, &scaled_width, &scaled_height, &letterbox,
+                       window_is_fullscreen);
+      }
+      old_mouse_press = new_press;
+    }
     ClearBackground(BLACK);
 
-    double audio_ts_double = av_q2d(audio_timest);
-    avray_update_textures(&dc, &video_tex, audio_ts_double);
+    avray_update_textures(&dc, &video_tex, audio_timest);
     video_timest = dc.video_timest;
 
     BeginDrawing();
 
-    avray_draw_video_textures(&video_tex, (Vector2){0, 0}, 0.0, scale_factor,
-                              WHITE);
+    avray_draw_video_textures(&video_tex, letterbox, 0.0, scale_factor, WHITE);
 
     if (!stream_paused)
       avray_update_timelines(&dc);
 
     /* Vector2 overlay_dims = */
-    avray_draw_debug_overlay(&dc, &video_tex, audio_ts_double, 10, 50,
-                             &overlay_dims, true);
+    if (show_overlay)
+      avray_draw_debug_overlay(&dc, &video_tex, audio_timest, 10, 50,
+                               &overlay_dims, true);
 
     if (stream_paused) {
       DrawRectangle(scaled_width / 2 - 30, scaled_height / 2 - 50, 20, 100,
