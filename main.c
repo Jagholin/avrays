@@ -16,7 +16,6 @@
 const bool audio_dbg = false;
 double start_clock_time;
 
-AVRational audio_timest = (AVRational){0, 1};
 DecoderContext dc;
 FILE *log_file;
 
@@ -82,7 +81,7 @@ void audio_cb(void *frame_data, unsigned int frames) {
   // the amount of data pulled by this function will always be no more than 4096
   // bytes (hardcoded in raylib, see ReadAudioBufferFramesInMixingFormat
   // internal function in raudio.c)
-  /*int size = */ avray_pull_audio(&dc, frame_data, frames, &audio_timest);
+  /*int size = */ avray_pull_audio(&dc, frame_data, frames);
 
   static bool info_given = false;
   if (!info_given) {
@@ -170,6 +169,8 @@ int main(int argc, char **argv) {
   while ((result = avray_open_file(&dc, file_name)) == RESULT_CANT_OPEN) {
     remove_file_from_argv(argv, &current_argc, file_index);
     // print_argv(argv, current_argc);
+    if (file_index == current_argc)
+      break;
     file_name = argv[file_index];
   }
   if (result != 0)
@@ -192,8 +193,8 @@ int main(int argc, char **argv) {
   SetAudioStreamCallback(stream, audio_cb);
   SetAudioStreamVolume(stream, current_volume);
   PlayAudioStream(stream);
+
   bool stream_paused = false;
-  float video_timest = 0;
   float filename_display_timeout = 5.0;
   Vector2 overlay_dims = {};
   bool show_overlay = false;
@@ -239,9 +240,6 @@ int main(int argc, char **argv) {
       SetAudioStreamVolume(stream, current_volume);
       PlayAudioStream(stream);
 
-      video_timest = 0;
-      audio_timest = AVRAT_ZERO;
-
       SetWindowTitle(file_name);
       filename_display_timeout = 5.0;
     }
@@ -279,12 +277,12 @@ int main(int argc, char **argv) {
       }
     }
     if (IsKeyPressed(KEY_D)) {
-      if (video_timest != 0)
-        avray_seek_to_frame(&dc, video_timest + 10.0);
+      if (dc.video_timest != 0)
+        avray_seek_to_frame(&dc, dc.video_timest + 10.0);
     }
     if (IsKeyPressed(KEY_A)) {
-      if (video_timest != 0)
-        avray_seek_to_frame(&dc, video_timest - 20.0);
+      if (dc.video_timest != 0)
+        avray_seek_to_frame(&dc, dc.video_timest - 20.0);
     }
     if (IsKeyPressed(KEY_G)) {
       show_overlay = !show_overlay;
@@ -308,8 +306,7 @@ int main(int argc, char **argv) {
     }
     ClearBackground(BLACK);
 
-    avray_update_textures(&dc, &video_tex, audio_timest);
-    video_timest = dc.video_timest;
+    avray_update_textures(&dc, &video_tex);
 
     BeginDrawing();
 
@@ -320,8 +317,7 @@ int main(int argc, char **argv) {
 
     /* Vector2 overlay_dims = */
     if (show_overlay)
-      avray_draw_debug_overlay(&dc, &video_tex, audio_timest, 10, 50,
-                               &overlay_dims, true);
+      avray_draw_debug_overlay(&dc, &video_tex, 10, 50, &overlay_dims, true);
 
     if (stream_paused) {
       DrawRectangle(scaled_width / 2 - 30, scaled_height / 2 - 50, 20, 100,
@@ -331,13 +327,13 @@ int main(int argc, char **argv) {
     }
 
     DrawFPS(10, 10);
-    float new_ts = video_timest;
+    float new_ts = dc.video_timest;
 
     int status =
         GuiSliderBar((Rectangle){20, render_height - 50, render_width - 40, 30},
                      NULL, NULL, &new_ts, 0, dc.duration);
     char msga[32], msgb[32], msg[128];
-    time_to_str(video_timest, msga, sizeof(msga));
+    time_to_str(dc.video_timest, msga, sizeof(msga));
     time_to_str(dc.duration, msgb, sizeof(msgb));
     snprintf(msg, sizeof(msg), "%s / %s", msga, msgb);
     DrawText(msg, 20, render_height - 80, 25, WHITE);

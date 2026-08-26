@@ -116,7 +116,7 @@ int avray_open_file(DecoderContext *ctx, const char *file_name);
 uint8_t *avray_pull_image(DecoderContext *ctx, float *timestamp);
 void avray_release_image(DecoderContext *ctx);
 int avray_pull_audio(DecoderContext *ctx, void *audio_buffer,
-                     unsigned int frames, AVRational *ts);
+                     unsigned int frames);
 void free_decoder_context(DecoderContext *ctx);
 bool avray_is_decoder_stopped(DecoderContext *ctx);
 void avray_seek_to_frame(DecoderContext *ctx, double ts);
@@ -129,13 +129,12 @@ void avray_shutdown(DecoderContext *ctx);
 
 int avray_init_graphics_objects(DecoderContext *ctx, RaylibObjects *objs);
 int avray_free_graphics_objects(RaylibObjects *objs);
-int avray_update_textures(DecoderContext *ctx, RaylibObjects *objs,
-                          AVRational ts);
+int avray_update_textures(DecoderContext *ctx, RaylibObjects *objs);
 int avray_draw_video_textures(RaylibObjects *objs, Vector2 position,
                               float rotation, float scale_factor, Color tint);
 void timeline_draw_ui(TimeLine tl, int x, int y, int width, int height,
                       unsigned int max, bool draw_background);
 Vector2 avray_draw_debug_overlay(DecoderContext *ctx, RaylibObjects *objs,
-                                 AVRational audio_ts, int x, int y,
-                                 Vector2 *pdims, bool draw_background);
+                                 int x, int y, Vector2 *pdims,
+                                 bool draw_background);
 #endif // !AVLIB_H

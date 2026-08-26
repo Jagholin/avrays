@@ -3,10 +3,9 @@
 #include "stb_avray.h"
 
 DecoderContext ctx = {};
-AVRational audio_ts = AVRAT_ZERO;
 
 void audio_cb(void *buffer, unsigned int frames) {
-  avray_pull_audio(&ctx, buffer, frames, &audio_ts);
+  avray_pull_audio(&ctx, buffer, frames);
 }
 
 int main(int argc, char **argv) {
@@ -30,7 +29,7 @@ int main(int argc, char **argv) {
     if (state == DS_FINISHED) {
       break;
     }
-    avray_update_textures(&ctx, &video_surface, audio_ts);
+    avray_update_textures(&ctx, &video_surface);
     BeginDrawing();
     avray_draw_video_textures(&video_surface, (Vector2){}, 0.0, 1.0, WHITE);
     EndDrawing();

@@ -446,7 +446,7 @@ int avray_open_file(DecoderContext *ctx, const char *file_name);
 uint8_t *avray_pull_image(DecoderContext *ctx, float *timestamp);
 void avray_release_image(DecoderContext *ctx);
 int avray_pull_audio(DecoderContext *ctx, void *audio_buffer,
-                     unsigned int frames, AVRational *ts);
+                     unsigned int frames);
 void free_decoder_context(DecoderContext *ctx);
 bool avray_is_decoder_stopped(DecoderContext *ctx);
 void avray_seek_to_frame(DecoderContext *ctx, double ts);
@@ -459,15 +459,14 @@ void avray_shutdown(DecoderContext *ctx);
 
 int avray_init_graphics_objects(DecoderContext *ctx, RaylibObjects *objs);
 int avray_free_graphics_objects(RaylibObjects *objs);
-int avray_update_textures(DecoderContext *ctx, RaylibObjects *objs,
-                          AVRational ts);
+int avray_update_textures(DecoderContext *ctx, RaylibObjects *objs);
 int avray_draw_video_textures(RaylibObjects *objs, Vector2 position,
                               float rotation, float scale_factor, Color tint);
 void timeline_draw_ui(TimeLine tl, int x, int y, int width, int height,
                       unsigned int max, bool draw_background);
 Vector2 avray_draw_debug_overlay(DecoderContext *ctx, RaylibObjects *objs,
-                                 AVRational audio_ts, int x, int y,
-                                 Vector2 *pdims, bool draw_background);
+                                 int x, int y, Vector2 *pdims,
+                                 bool draw_background);
 #endif // !AVLIB_H
 #ifdef AVRAY_IMPLEMENTATION
 #include <libavcodec/avcodec.h>
@@ -550,11 +549,10 @@ struct DecoderPrivate {
   RingBuffer audio_buffer;
   size_t image_buffer_size;
   size_t audio_buffer_size;
-  // int i;
+
   bool audio_configured;
   TimestampResetSM timestamp_reset_sm;
   AVRational new_timestamp;
-  // bool eof_encountered;
 
   LinkedQueue *command_queue;
 
@@ -562,7 +560,9 @@ struct DecoderPrivate {
   MutexType audio_buffer_mtx;
   MutexType command_q_mtx;
   SemaphoreType sem;
-  // SemaphoreType startup_sem;
+
+  AVRational
+      audio_pull_timestamp; // Last timestamp reached in pull_audio function
 };
 
 static const char *state_str(DecoderState st) {
@@ -678,6 +678,7 @@ int avray_init_decoder(DecoderContext *ctx) {
   ctx->p = malloc(sizeof(struct DecoderPrivate));
   memset(ctx->p, 0, sizeof(struct DecoderPrivate));
   struct DecoderPrivate *p = ctx->p;
+  p->audio_pull_timestamp = AVRAT_ZERO;
 
   create_mutex(&p->image_buffer_mtx);
   create_mutex(&p->audio_buffer_mtx);
@@ -913,6 +914,7 @@ int avray_open_file(DecoderContext *ctx, const char *file_name) {
   ctx->pixel_format = origin_par->format;
 
   // ctx->state = DS_STARTUP;
+  p->audio_pull_timestamp = AVRAT_ZERO;
   switch_dec_state(ctx, DS_STARTUP);
   mutex_unlock(&ctx->dc_mutex);
 
@@ -1296,7 +1298,7 @@ void avray_release_image(DecoderContext *ctx) {
 }
 
 int avray_pull_audio(DecoderContext *ctx, void *audio_buffer,
-                     unsigned int frames, AVRational *ts) {
+                     unsigned int frames) {
   // printf("pull_audio %d called\n", frames);
   struct DecoderPrivate *p = ctx->p;
   if (ctx->state != DS_PLAYING && ctx->state != DS_FILEEOF) {
@@ -1319,10 +1321,12 @@ int avray_pull_audio(DecoderContext *ctx, void *audio_buffer,
   try_unlock_decoder_sem(ctx);
   const int bytes_per_frame = sizeof(float) * 2;
   if (p->timestamp_reset_sm == TR_TIMESTAMP_CAPTURED) {
-    *ts = p->new_timestamp;
+    p->audio_pull_timestamp = p->new_timestamp;
     p->timestamp_reset_sm = TR_FINISHED;
   } else {
-    *ts = av_add_q(*ts, av_make_q(result / bytes_per_frame, ctx->sample_rate));
+    p->audio_pull_timestamp =
+        av_add_q(p->audio_pull_timestamp,
+                 av_make_q(result / bytes_per_frame, ctx->sample_rate));
   }
   if (result == 0) {
     try_move_to_finished_state(ctx);
@@ -1539,7 +1543,6 @@ void avray_shutdown(DecoderContext *ctx) {
   semaphore_incr(&ctx->p->sem);
   pthread_join(decoder_thread, NULL);
   free_decoder_context(ctx);
-  // TODO: implement
 }
 
 // Raylib specific things
@@ -1647,8 +1650,7 @@ int avray_free_graphics_objects(RaylibObjects *objs) {
   return RESULT_OK;
 }
 
-int avray_update_textures(DecoderContext *ctx, RaylibObjects *objs,
-                          AVRational ts_rational) {
+int avray_update_textures(DecoderContext *ctx, RaylibObjects *objs) {
   // If the TimestampResetSM is active, the ts is probably not reliable
   struct DecoderPrivate *p = ctx->p;
   if (p->timestamp_reset_sm != TR_NONE &&
@@ -1656,7 +1658,7 @@ int avray_update_textures(DecoderContext *ctx, RaylibObjects *objs,
     // So we can just return prematurely, no updates needed
     return RESULT_OK;
   }
-  double ts = av_q2d(ts_rational);
+  double ts = av_q2d(p->audio_pull_timestamp);
   // A special case is when the we are in DS_FILEEOF state, and no more audio
   // data in the buffers are present. In this state, we will have to override
   // video_timest<ts checks so that we can flush the rest of the video frames.
@@ -1759,8 +1761,8 @@ void timeline_draw_ui(TimeLine tl, int x, int y, int width, int height,
 }
 
 Vector2 avray_draw_debug_overlay(DecoderContext *ctx, RaylibObjects *objs,
-                                 AVRational audio_ts, int x, int y,
-                                 Vector2 *pdims, bool draw_background) {
+                                 int x, int y, Vector2 *pdims,
+                                 bool draw_background) {
   struct DecoderPrivate *p = ctx->p;
   const unsigned int LINEHEIGHT = 25;
   const unsigned int FONTSIZE = 20;
@@ -1782,7 +1784,7 @@ Vector2 avray_draw_debug_overlay(DecoderContext *ctx, RaylibObjects *objs,
     dims.x = 300;
 
   char msg[128], msga[128];
-  double audio_ts_double = av_q2d(audio_ts);
+  double audio_ts_double = av_q2d(p->audio_pull_timestamp);
   snprintf(msg, sizeof(msg), "atime: %.2f vtime: %.2f d: %.2f f: %d",
            audio_ts_double, ctx->video_timest,
            fabs(audio_ts_double - ctx->video_timest), objs->frame_counter);
