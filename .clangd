@@ -1,2 +1,2 @@
 CompileFlags:
-  Add: [-xc, -Wall]
+  Add: [-xc, -Wall, -DAVRAY_IMPLEMENTATION]
