@@ -11,7 +11,6 @@ void audio_cb(void *buffer, unsigned int frames) {
 int main(int argc, char **argv) {
   RaylibObjects video_surface;
   InitWindow(1920, 1080, "Minimal videoplayer");
-  avray_initialize();
   avray_init_decoder(&ctx);
   avray_open_file(&ctx, argv[1]);
   avray_init_graphics_objects(&ctx, &video_surface);

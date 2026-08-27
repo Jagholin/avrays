@@ -117,13 +117,13 @@ uint8_t *avray_pull_image(DecoderContext *ctx, float *timestamp);
 void avray_release_image(DecoderContext *ctx);
 int avray_pull_audio(DecoderContext *ctx, void *audio_buffer,
                      unsigned int frames);
-void free_decoder_context(DecoderContext *ctx);
+// call avray_shutdown instead
+// void free_decoder_context(DecoderContext *ctx);
 bool avray_is_decoder_stopped(DecoderContext *ctx);
 void avray_seek_to_frame(DecoderContext *ctx, double ts);
 void avray_close_file(DecoderContext *ctx);
 
 void avray_update_timelines(DecoderContext *ctx);
-void avray_initialize();
 void avray_shutdown(DecoderContext *ctx);
 // void avray_wait_ready(DecoderContext *ctx);
 

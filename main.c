@@ -158,7 +158,6 @@ int main(int argc, char **argv) {
   if (argc < 2) {
     return 1;
   }
-  avray_initialize();
   int result = avray_init_decoder(&dc);
   if (result != 0)
     exit(EXIT_FAILURE);

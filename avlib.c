@@ -66,8 +66,9 @@ static void semaphore_get_value(SemaphoreType *s, int *val) {
 }
 void mutex_lock(MutexType *m) { pthread_mutex_lock(m); }
 void mutex_unlock(MutexType *m) { pthread_mutex_unlock(m); }
-static void thread_create(ThreadType *t, void *(*thread_proc)(void *)) {
-  pthread_create(t, NULL, thread_proc, NULL);
+static void thread_create(ThreadType *t, void *(*thread_proc)(void *),
+                          void *arg) {
+  pthread_create(t, NULL, thread_proc, arg);
 }
 
 int time_to_str(double seconds, char *buf, size_t n) {
@@ -121,6 +122,7 @@ struct DecoderPrivate {
   MutexType audio_buffer_mtx;
   MutexType command_q_mtx;
   SemaphoreType sem;
+  ThreadType decoder_thread;
 
   AVRational
       audio_pull_timestamp; // Last timestamp reached in pull_audio function
@@ -228,13 +230,62 @@ static void add_command_to_q(LinkedQueue **q, struct DecoderCommand **cmd,
   *q = queue_add(*q, *cmd);
 }
 
-static DecoderContext *dc;
-ThreadType decoder_thread;
+// static DecoderContext *dc;
+// ThreadType decoder_thread;
+static int avray_continue_decoding(DecoderContext *);
+static void *decode_thread(void *ctx) {
+  int result = 0;
+  DecoderContext *dc = (DecoderContext *)ctx;
+  static int call_count = 0;
+  // wait for dc to be populated
+  // while (!dc) {
+  //   usleep(1000);
+  // }
+  do {
+    switch (dc->state) {
+    case DS_PLAYING:
+      mutex_lock(&dc->p->command_q_mtx);
+      struct DecoderCommand *cmd = queue_pop(&dc->p->command_queue);
+      mutex_unlock(&dc->p->command_q_mtx);
+      if (cmd) {
+        TraceLog(LOG_DEBUG, "AVRAYS: Command received");
+        cmd->dispatch(dc, cmd);
+        cmd->free_me(cmd);
+      }
+      // FALLTHROUGH
+    case DS_STARTUP:
+      result = avray_continue_decoding(dc);
+      call_count++;
+      if (result < 0) {
+        if (result == AVERROR_EOF) {
+          // dc->state = DS_SHUTDOWN;
+          switch_dec_state(dc, DS_FILEEOF);
+        } else {
+          char err_desc[256];
+          av_strerror(result, err_desc, 256);
+          TraceLog(LOG_ERROR, "Call count at err: %d, err: %d(%s)", call_count,
+                   result, err_desc);
+          // dc->state = DS_ERROR;
+          switch_dec_state(dc, DS_ERROR);
+        }
+      }
+      // exit(EXIT_FAILURE);
+      break;
+    default:
+      usleep(1000);
+      break;
+    }
+  } while (dc->state != DS_SHUTDOWN);
+  TraceLog(LOG_INFO, "AVRAYS: Decode THREAD shutdown.");
+  return NULL;
+}
+
+void free_decoder_context(DecoderContext *);
 
 int avray_init_decoder(DecoderContext *ctx) {
-  if (dc != NULL) {
-    return RESULT_ERROR;
-  }
+  // if (dc != NULL) {
+  //   return RESULT_ERROR;
+  // }
   *ctx = (DecoderContext){};
   ctx->p = malloc(sizeof(struct DecoderPrivate));
   memset(ctx->p, 0, sizeof(struct DecoderPrivate));
@@ -269,13 +320,14 @@ int avray_init_decoder(DecoderContext *ctx) {
 
   p->command_queue = make_queue();
 
-  dc = ctx;
+  // dc = ctx;
   // dc->state = DS_READY;
-  switch_dec_state(dc, DS_READY);
-  return RESULT_OK;
+  switch_dec_state(ctx, DS_READY);
+  thread_create(&p->decoder_thread, &decode_thread, ctx);
+  return result;
 cleanup:
   free_decoder_context(ctx);
-  return RESULT_ERROR;
+  return result;
 }
 
 static int time_probe_seek_pts(DecoderContext *ctx, int64_t *presult) {
@@ -745,7 +797,6 @@ cleanup:
 }
 
 int avray_continue_decoding(DecoderContext *ctx) {
-  assert(ctx == dc);
   if (ctx->state != DS_PLAYING && ctx->state != DS_STARTUP) {
     return RESULT_OK;
   }
@@ -982,59 +1033,14 @@ void avray_close_file(DecoderContext *ctx) {
   mutex_unlock(&p->command_q_mtx);
 }
 
-static void *decode_thread(void *_) {
-  int result = 0;
-  static int call_count = 0;
-  // wait for dc to be populated
-  while (!dc) {
-    usleep(1000);
-  }
-  do {
-    switch (dc->state) {
-    case DS_PLAYING:
-      mutex_lock(&dc->p->command_q_mtx);
-      struct DecoderCommand *cmd = queue_pop(&dc->p->command_queue);
-      mutex_unlock(&dc->p->command_q_mtx);
-      if (cmd) {
-        TraceLog(LOG_DEBUG, "AVRAYS: Command received");
-        cmd->dispatch(dc, cmd);
-        cmd->free_me(cmd);
-      }
-      // FALLTHROUGH
-    case DS_STARTUP:
-      result = avray_continue_decoding(dc);
-      call_count++;
-      if (result < 0) {
-        if (result == AVERROR_EOF) {
-          // dc->state = DS_SHUTDOWN;
-          switch_dec_state(dc, DS_FILEEOF);
-        } else {
-          char err_desc[256];
-          av_strerror(result, err_desc, 256);
-          TraceLog(LOG_ERROR, "Call count at err: %d, err: %d(%s)", call_count,
-                   result, err_desc);
-          // dc->state = DS_ERROR;
-          switch_dec_state(dc, DS_ERROR);
-        }
-      }
-      // exit(EXIT_FAILURE);
-      break;
-    default:
-      usleep(1000);
-      break;
-    }
-  } while (dc->state != DS_SHUTDOWN);
-  TraceLog(LOG_INFO, "AVRAYS: Decode THREAD shutdown.");
-  return (void *)result;
-}
-
 bool avray_is_decoder_stopped(DecoderContext *ctx) {
   return ctx->state == DS_SHUTDOWN /* || ctx->state == DS_FINISHED*/ ||
          ctx->state == DS_ERROR;
 }
 
 void free_decoder_context(DecoderContext *ctx) {
-  assert(dc == ctx || dc == NULL);
+  // TODO: join the thread here?
+  // for now we just assume that the thread was either joined, or never started
   struct DecoderPrivate *p = ctx->p;
 
   if (p->command_queue) {
@@ -1073,7 +1079,6 @@ void free_decoder_context(DecoderContext *ctx) {
   }
   free(p);
   ctx->p = NULL;
-  dc = NULL;
 }
 
 void avray_update_timelines(DecoderContext *ctx) {
@@ -1092,7 +1097,7 @@ void avray_update_timelines(DecoderContext *ctx) {
   }
 }
 
-void avray_initialize() { thread_create(&decoder_thread, &decode_thread); }
+// void avray_initialize() { thread_create(&decoder_thread, &decode_thread); }
 // void avray_wait_ready(DecoderContext *ctx) {
 //   semaphore_wait(&ctx->p->startup_sem);
 // }
@@ -1102,7 +1107,7 @@ void avray_shutdown(DecoderContext *ctx) {
   switch_dec_state(ctx, DS_SHUTDOWN);
   // Release semaphore sem so that avray_continue_decoding could proceed
   semaphore_incr(&ctx->p->sem);
-  pthread_join(decoder_thread, NULL);
+  pthread_join(ctx->p->decoder_thread, NULL);
   free_decoder_context(ctx);
 }
 
