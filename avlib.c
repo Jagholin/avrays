@@ -35,6 +35,7 @@
 #include <libswresample/swresample.h>
 #include <pthread.h>
 #include <semaphore.h>
+#include <unistd.h>
 
 #include "avlib.h"
 #include "utils.h"
@@ -71,6 +72,7 @@ static void thread_create(ThreadType *t, void *(*thread_proc)(void *),
   pthread_create(t, NULL, thread_proc, arg);
 }
 static void thread_join(ThreadType *t) { pthread_join(*t, NULL); }
+static void thread_sleep_ms(unsigned int ms) { usleep(ms * 1000); }
 
 int time_to_str(double seconds, char *buf, size_t n) {
   int sec = floor(seconds);
@@ -273,7 +275,7 @@ static void *decode_thread(void *ctx) {
       // exit(EXIT_FAILURE);
       break;
     default:
-      usleep(1000);
+      thread_sleep_ms(1);
       break;
     }
   } while (dc->state != DS_SHUTDOWN);

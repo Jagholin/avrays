@@ -18,6 +18,13 @@ If you don't wish to use stb_avray.h, then you will need the following files: `a
 - make_stb is a bash script that generates stb_avray.h file.
 - stb_avray.h is a single header version of the library. You can include it instead of the avlib.c/avlib.h/utils.h combo.
 
+## How to pause, or note about how video/audio sync works
+
+AVRay assumes that the audio stream will be continously pulled in raylib's audio stream callback function, and calculates current timestamps/syncs video playback based on that. This has a couple of consequences:
+
+- Playing audio is necessary for AVRay to work, and files without audio track can't be properly played.
+- In order to pause playback, it's enough to simply pause/interrupt audio stream.
+
 ## Video player example
 
 ![Video player window](/readme/screen_player.png)
@@ -175,3 +182,29 @@ Also see `avlib.h` for definitions of `DecoderContext` and return values.
 Currently only yuv420p and yuv420p10 (in ffmpeg's terminology) pixel formats are supported. Support for others will be added if necessary, make a github issue with output from `ffprobe` to request adding support for a new format.
 
 The library is made in linux, and uses `pthreads` for multithreading and synchronization. If you want to compile it on other operating system, you will probably need to link it with `pthreads` implementation for your OS, or rewrite pthreads-dependent code to use something else (the relevant code parts are conveniently placed in separate functions, so I hope this task should be easy enough).
+In particular, these functions might need OS-specific implementation(see avlib.c):
+```c
+static void create_mutex(MutexType *m) { pthread_mutex_init(m, NULL); }
+static void create_semaphore(SemaphoreType *s, int init_value) {
+  sem_init(s, 0, init_value);
+}
+static void free_mutex(MutexType *m) { pthread_mutex_destroy(m); }
+static void free_semaphore(SemaphoreType *s) {
+  sem_close(s);
+  sem_destroy(s);
+}
+
+static void semaphore_wait(SemaphoreType *s) { sem_wait(s); }
+static void semaphore_incr(SemaphoreType *s) { sem_post(s); }
+static void semaphore_get_value(SemaphoreType *s, int *val) {
+  sem_getvalue(s, val);
+}
+void mutex_lock(MutexType *m) { pthread_mutex_lock(m); }
+void mutex_unlock(MutexType *m) { pthread_mutex_unlock(m); }
+static void thread_create(ThreadType *t, void *(*thread_proc)(void *),
+                          void *arg) {
+  pthread_create(t, NULL, thread_proc, arg);
+}
+static void thread_join(ThreadType *t) { pthread_join(*t, NULL); }
+static void thread_sleep_ms(unsigned int ms) { usleep(ms * 1000); }
+```

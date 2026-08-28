@@ -30,16 +30,13 @@
  **********************************************************************************************/
 #ifndef UTILS_H
 #define UTILS_H
-#include <GL/gl.h>
 #include <assert.h>
 #include <libavutil/mem.h>
-#include <pthread.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #define UTILFUNC [[maybe_unused]] static inline
 

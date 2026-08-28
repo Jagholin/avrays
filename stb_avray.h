@@ -36,16 +36,13 @@
 #define AVRAY_STB
 #ifndef UTILS_H
 #define UTILS_H
-#include <GL/gl.h>
 #include <assert.h>
 #include <libavutil/mem.h>
-#include <pthread.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #define UTILFUNC [[maybe_unused]] static inline
 
@@ -480,6 +477,7 @@ Vector2 avray_draw_debug_overlay(DecoderContext *ctx, RaylibObjects *objs,
 #include <libswresample/swresample.h>
 #include <pthread.h>
 #include <semaphore.h>
+#include <unistd.h>
 
 
 // Size of the video buffer if the framerate is not available
@@ -514,6 +512,7 @@ static void avray__thread_create(ThreadType *t, void *(*thread_proc)(void *),
   pthread_create(t, NULL, thread_proc, arg);
 }
 static void thread_join(ThreadType *t) { pthread_join(*t, NULL); }
+static void thread_sleep_ms(unsigned int ms) { usleep(ms * 1000); }
 
 int time_to_str(double seconds, char *buf, size_t n) {
   int sec = floor(seconds);
@@ -716,7 +715,7 @@ static void *avray__decode_thread(void *ctx) {
       // exit(EXIT_FAILURE);
       break;
     default:
-      usleep(1000);
+      thread_sleep_ms(1);
       break;
     }
   } while (dc->state != DS_SHUTDOWN);
