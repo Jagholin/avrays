@@ -37,6 +37,7 @@ makestb() {
   func_rename add_command_to_q
 
   func_rename time_probe_seek_pts
+  func_rename free_decoder_context
   func_rename feed_codec
   func_rename send_eof2codecs
   func_rename pull_frame

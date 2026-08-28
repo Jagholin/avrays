@@ -70,6 +70,7 @@ static void thread_create(ThreadType *t, void *(*thread_proc)(void *),
                           void *arg) {
   pthread_create(t, NULL, thread_proc, arg);
 }
+static void thread_join(ThreadType *t) { pthread_join(*t, NULL); }
 
 int time_to_str(double seconds, char *buf, size_t n) {
   int sec = floor(seconds);
@@ -1107,7 +1108,7 @@ void avray_shutdown(DecoderContext *ctx) {
   switch_dec_state(ctx, DS_SHUTDOWN);
   // Release semaphore sem so that avray_continue_decoding could proceed
   semaphore_incr(&ctx->p->sem);
-  pthread_join(ctx->p->decoder_thread, NULL);
+  thread_join(&ctx->p->decoder_thread);
   free_decoder_context(ctx);
 }
 
@@ -1251,11 +1252,15 @@ int avray_update_textures(DecoderContext *ctx, RaylibObjects *objs) {
       }
     }
     if (image_buff) {
-      UpdateTexture(objs->tex_luma, image_buff);
-      image_buff += ctx->video_height * ctx->video_width * objs->bytespp;
-      UpdateTexture(objs->tex_u, image_buff);
-      image_buff += ctx->video_height * ctx->video_width * objs->bytespp / 4;
-      UpdateTexture(objs->tex_v, image_buff);
+      // If tex_luma isn't initialized, assume that we couldn't find shaders for
+      // the current pixelformat, so we can't display video
+      if (IsTextureValid(objs->tex_luma)) {
+        UpdateTexture(objs->tex_luma, image_buff);
+        image_buff += ctx->video_height * ctx->video_width * objs->bytespp;
+        UpdateTexture(objs->tex_u, image_buff);
+        image_buff += ctx->video_height * ctx->video_width * objs->bytespp / 4;
+        UpdateTexture(objs->tex_v, image_buff);
+      }
     }
     avray_release_image(ctx);
   }
@@ -1265,6 +1270,11 @@ int avray_update_textures(DecoderContext *ctx, RaylibObjects *objs) {
 
 int avray_draw_video_textures(RaylibObjects *objs, Vector2 position,
                               float rotation, float scale_factor, Color tint) {
+  // If tex_luma isn't initialized, assume that we couldn't find shaders for
+  // the current pixelformat, so we can't display video
+  if (!IsTextureValid(objs->tex_luma)) {
+    return RESULT_OK;
+  }
   BeginShaderMode(objs->video_shader);
   {
     SetShaderValueTexture(objs->video_shader, objs->y_location, objs->tex_luma);

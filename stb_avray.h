@@ -378,15 +378,15 @@ UTILFUNC void avray__queue_free(avray__LinkedQueue *q) {
 struct DecoderPrivate;
 
 typedef enum DecoderState {
-  DS_UNINIT = 0, // default ZERO value
-  DS_READY,      // after call to avray_init_decoder
-  DS_STARTUP,    // filling buffers before playback
-  DS_PLAYING,    // actively playing the video
-  DS_FILEEOF,    // video file at EOF, but buffers aren't empty yet
-  DS_FINISHED,   // File at EOF and buffers are empty. Decoder thread transfers
-                 // this state to DS_READY.
-  DS_SHUTDOWN,   // after call to avray_shutdown
-  DS_ERROR = 100,
+  DS_UNINIT = 0,  // default ZERO value
+  DS_READY,       // after call to avray_init_decoder
+  DS_STARTUP,     // filling buffers before playback
+  DS_PLAYING,     // actively playing the video
+  DS_FILEEOF,     // video file at EOF, but buffers aren't empty yet
+  DS_FINISHED,    // File at EOF and buffers are empty. Otherwise the same as
+                  // DS_READY, can call avray_open_file
+  DS_SHUTDOWN,    // after call to avray_shutdown
+  DS_ERROR = 100, // error condition
 } DecoderState;
 
 typedef struct RaylibObjects {
@@ -513,6 +513,7 @@ static void avray__thread_create(ThreadType *t, void *(*thread_proc)(void *),
                           void *arg) {
   pthread_create(t, NULL, thread_proc, arg);
 }
+static void thread_join(ThreadType *t) { pthread_join(*t, NULL); }
 
 int time_to_str(double seconds, char *buf, size_t n) {
   int sec = floor(seconds);
@@ -723,7 +724,7 @@ static void *avray__decode_thread(void *ctx) {
   return NULL;
 }
 
-void free_decoder_context(DecoderContext *);
+void avray__free_decoder_context(DecoderContext *);
 
 int avray_init_decoder(DecoderContext *ctx) {
   // if (dc != NULL) {
@@ -769,7 +770,7 @@ int avray_init_decoder(DecoderContext *ctx) {
   avray__thread_create(&p->decoder_thread, &avray__decode_thread, ctx);
   return result;
 cleanup:
-  free_decoder_context(ctx);
+  avray__free_decoder_context(ctx);
   return result;
 }
 
@@ -1481,7 +1482,7 @@ bool avray_is_decoder_stopped(DecoderContext *ctx) {
          ctx->state == DS_ERROR;
 }
 
-void free_decoder_context(DecoderContext *ctx) {
+void avray__free_decoder_context(DecoderContext *ctx) {
   // TODO: join the thread here?
   // for now we just assume that the thread was either joined, or never started
   struct DecoderPrivate *p = ctx->p;
@@ -1550,8 +1551,8 @@ void avray_shutdown(DecoderContext *ctx) {
   avray__switch_dec_state(ctx, DS_SHUTDOWN);
   // Release semaphore sem so that avray_continue_decoding could proceed
   avray__semaphore_incr(&ctx->p->sem);
-  pthread_join(ctx->p->decoder_thread, NULL);
-  free_decoder_context(ctx);
+  thread_join(&ctx->p->decoder_thread);
+  avray__free_decoder_context(ctx);
 }
 
 // Raylib specific things
@@ -1694,11 +1695,15 @@ int avray_update_textures(DecoderContext *ctx, RaylibObjects *objs) {
       }
     }
     if (image_buff) {
-      UpdateTexture(objs->tex_luma, image_buff);
-      image_buff += ctx->video_height * ctx->video_width * objs->bytespp;
-      UpdateTexture(objs->tex_u, image_buff);
-      image_buff += ctx->video_height * ctx->video_width * objs->bytespp / 4;
-      UpdateTexture(objs->tex_v, image_buff);
+      // If tex_luma isn't initialized, assume that we couldn't find shaders for
+      // the current pixelformat, so we can't display video
+      if (IsTextureValid(objs->tex_luma)) {
+        UpdateTexture(objs->tex_luma, image_buff);
+        image_buff += ctx->video_height * ctx->video_width * objs->bytespp;
+        UpdateTexture(objs->tex_u, image_buff);
+        image_buff += ctx->video_height * ctx->video_width * objs->bytespp / 4;
+        UpdateTexture(objs->tex_v, image_buff);
+      }
     }
     avray_release_image(ctx);
   }
@@ -1708,6 +1713,11 @@ int avray_update_textures(DecoderContext *ctx, RaylibObjects *objs) {
 
 int avray_draw_video_textures(RaylibObjects *objs, Vector2 position,
                               float rotation, float scale_factor, Color tint) {
+  // If tex_luma isn't initialized, assume that we couldn't find shaders for
+  // the current pixelformat, so we can't display video
+  if (!IsTextureValid(objs->tex_luma)) {
+    return RESULT_OK;
+  }
   BeginShaderMode(objs->video_shader);
   {
     SetShaderValueTexture(objs->video_shader, objs->y_location, objs->tex_luma);

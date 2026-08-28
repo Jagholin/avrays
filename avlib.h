@@ -44,15 +44,15 @@
 struct DecoderPrivate;
 
 typedef enum DecoderState {
-  DS_UNINIT = 0, // default ZERO value
-  DS_READY,      // after call to avray_init_decoder
-  DS_STARTUP,    // filling buffers before playback
-  DS_PLAYING,    // actively playing the video
-  DS_FILEEOF,    // video file at EOF, but buffers aren't empty yet
-  DS_FINISHED,   // File at EOF and buffers are empty. Decoder thread transfers
-                 // this state to DS_READY.
-  DS_SHUTDOWN,   // after call to avray_shutdown
-  DS_ERROR = 100,
+  DS_UNINIT = 0,  // default ZERO value
+  DS_READY,       // after call to avray_init_decoder
+  DS_STARTUP,     // filling buffers before playback
+  DS_PLAYING,     // actively playing the video
+  DS_FILEEOF,     // video file at EOF, but buffers aren't empty yet
+  DS_FINISHED,    // File at EOF and buffers are empty. Otherwise the same as
+                  // DS_READY, can call avray_open_file
+  DS_SHUTDOWN,    // after call to avray_shutdown
+  DS_ERROR = 100, // error condition
 } DecoderState;
 
 typedef struct RaylibObjects {
