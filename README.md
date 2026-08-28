@@ -24,6 +24,8 @@ If you don't wish to use stb_avray.h, then you will need the following files: `a
 
 `main.c` implements a more complete video player with pausing,seeking and playlist functionality.
 
+It uses raygui which is included in this repo as a submodule, so make sure to fetch it with `git submodule update --init --recursive` 
+
 You can compile it using cmake by running `cmake -B build -DCMAKE_BUILD_TYPE=Release && cd build && cmake --build .`
 
 The executable expects as argument(s) a list of files to be played. These will be added to "playlist".
@@ -31,7 +33,7 @@ The executable expects as argument(s) a list of files to be played. These will b
 The player has the following controls:
 
 - Key `A` seeks ~10 seconds backwards
-- Key D seeks ~10 seconds forwards
+- Key `D` seeks ~10 seconds forwards
 - `UP arrow` increases the volume
 - `DOWN arrow` decreases the volume
 - You can click on the timeline to seek to a particular location of the file
