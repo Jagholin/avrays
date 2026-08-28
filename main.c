@@ -90,6 +90,27 @@ void audio_cb(void *frame_data, unsigned int frames) {
   }
 }
 
+void calculate_letterbox(float *sf, int sw, int sh, Vector2 *displacement) {
+  // Calculate scale factor
+  float scale_factor_w = (float)sw / dc.video_width;
+  float scale_factor_h = (float)sh / dc.video_height;
+  *sf = scale_factor_w;
+  if (scale_factor_h < *sf)
+    *sf = scale_factor_h;
+
+  float displayed_width = dc.video_width * *sf;
+  float displayed_height = dc.video_height * *sf;
+
+  // Calculate letterboxing displacement
+  if (fabsf(displayed_width - sw) > fabsf(displayed_height - sh)) {
+    displacement->x = 0.5 * (sw - displayed_width);
+    displacement->y = 0;
+  } else {
+    displacement->x = 0;
+    displacement->y = 0.5 * (sh - displayed_height);
+  }
+}
+
 void rescale_window(float *sf, int *sw, int *sh, Vector2 *displacement,
                     bool fullscreen) {
   unsigned int scaled_width = Clamp(dc.video_width, 100, 2000);
@@ -101,31 +122,12 @@ void rescale_window(float *sf, int *sw, int *sh, Vector2 *displacement,
     scaled_height = GetMonitorHeight(GetCurrentMonitor());
   }
 
-  float scale_factor_w = (float)scaled_width / dc.video_width;
-  float scale_factor_h = (float)scaled_height / dc.video_height;
-  float scale_factor = scale_factor_w;
-  if (scale_factor_h < scale_factor)
-    scale_factor = scale_factor_h;
+  calculate_letterbox(sf, scaled_width, scaled_height, displacement);
 
-  if (sf)
-    *sf = scale_factor;
   if (sw)
     *sw = scaled_width;
   if (sh)
     *sh = scaled_height;
-
-  float displayed_width = dc.video_width * scale_factor;
-  float displayed_height = dc.video_height * scale_factor;
-
-  // Calculate letterboxing displacement
-  if (fabsf(displayed_width - scaled_width) >
-      fabsf(displayed_height - scaled_height)) {
-    displacement->x = 0.5 * (scaled_width - displayed_width);
-    displacement->y = 0;
-  } else {
-    displacement->x = 0;
-    displacement->y = 0.5 * (scaled_height - displayed_height);
-  }
 
   SetWindowSize(scaled_width, scaled_height);
 }
@@ -181,7 +183,7 @@ int main(int argc, char **argv) {
   InitWindow(1024, 768, file_name);
   rescale_window(&scale_factor, &scaled_width, &scaled_height, &letterbox,
                  false);
-  SetWindowState(FLAG_WINDOW_ALWAYS_RUN);
+  SetWindowState(FLAG_WINDOW_ALWAYS_RUN | FLAG_WINDOW_RESIZABLE);
   InitAudioDevice();
 
   SetTargetFPS(60);
@@ -309,6 +311,7 @@ int main(int argc, char **argv) {
 
     BeginDrawing();
 
+    calculate_letterbox(&scale_factor, render_width, render_height, &letterbox);
     avray_draw_video_textures(&video_tex, letterbox, 0.0, scale_factor, WHITE);
 
     if (!stream_paused)
