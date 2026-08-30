@@ -835,7 +835,14 @@ int avray_continue_decoding(DecoderContext *ctx) {
       } else {
         p->pkt_populated = true;
         result = feed_codec(p, NULL);
-        ERRCHECK("Feed codec error");
+        
+        // ИСПРАВЛЕНИЕ: Нефатальная обработка ошибок кодека
+        // Если отправка пакета не удалась, просто логируем и продолжаем
+        if (result < 0) {
+          TraceLog(LOG_WARNING, "AVRAYS: Feed codec warning (dropping packet), err: %d", result);
+          p->pkt_populated = false;
+          result = RESULT_OK; // Сбрасываем ошибку, чтобы не триггерить DS_ERROR
+        }
       }
       // 2c. try pulling a frame again if we dont have it yet
       result = pull_frame(p);
@@ -980,11 +987,16 @@ static int seek_to_frame(DecoderContext *ctx, double ts) {
     result = avformat_seek_file(p->fmt_ctx, -1, 0, time, INT64_MAX, 0);
     TraceLog(LOG_DEBUG, "AVRAYS: Seek file (+-INF) returns %d", result);
   }
+  
+  // ИСПРАВЛЕНИЕ: Graceful fallback при невозможности перемотки
   if (result != 0) {
+    TraceLog(LOG_WARNING, "AVRAYS: Seek to %.2f failed, staying at current position", ts);
+    // Разблокируем мьютексы и возвращаем OK, чтобы декодер продолжил работу
     mutex_unlock(&p->image_buffer_mtx);
     mutex_unlock(&p->audio_buffer_mtx);
-    return result;
+    return RESULT_OK;
   }
+  
   avcodec_flush_buffers(p->ctxv);
   avcodec_flush_buffers(p->ctxa);
   if (ctx->state != DS_STARTUP) {
