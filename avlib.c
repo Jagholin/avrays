@@ -35,7 +35,10 @@
 #include <libswresample/swresample.h>
 #include <pthread.h>
 #include <semaphore.h>
+#ifndef _MSC_VER
+// for usleep()
 #include <unistd.h>
+#endif
 
 #include "avlib.h"
 #include "utils.h"
@@ -72,7 +75,12 @@ static void thread_create(ThreadType *t, void *(*thread_proc)(void *),
   pthread_create(t, NULL, thread_proc, arg);
 }
 static void thread_join(ThreadType *t) { pthread_join(*t, NULL); }
+
+#ifdef _MSC_VER
+static void thread_sleep_ms(unsigned int ms) { Sleep(ms); }
+#else
 static void thread_sleep_ms(unsigned int ms) { usleep(ms * 1000); }
+#endif
 
 int time_to_str(double seconds, char *buf, size_t n) {
   int sec = floor(seconds);
@@ -397,6 +405,7 @@ int avray_open_file(DecoderContext *ctx, const char *file_name) {
   }
   assert(ctx->state == DS_READY);
   struct DecoderPrivate *p = ctx->p;
+  TraceLog(LOG_INFO, "Trying to open file: %s", file_name);
   result = avformat_open_input(&p->fmt_ctx, file_name, NULL, NULL);
   if (result != 0) {
     return RESULT_CANT_OPEN;
@@ -404,7 +413,7 @@ int avray_open_file(DecoderContext *ctx, const char *file_name) {
   ERRCHECK("Can't open file");
 
   result = avformat_find_stream_info(p->fmt_ctx, NULL);
-  ERRCHECK("Cant find stream info");
+  ERRCHECK2R(result >= 0, RESULT_CANT_OPEN, "Cant find stream info");
 
   p->video_stream =
       av_find_best_stream(p->fmt_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
@@ -1212,10 +1221,22 @@ int avray_init_graphics_objects(DecoderContext *ctx, RaylibObjects *objs) {
 }
 
 int avray_free_graphics_objects(RaylibObjects *objs) {
-  UnloadShader(objs->video_shader);
-  UnloadTexture(objs->tex_luma);
-  UnloadTexture(objs->tex_u);
-  UnloadTexture(objs->tex_v);
+  if (IsShaderValid(objs->video_shader)) {
+    UnloadShader(objs->video_shader);
+    objs->video_shader.id = 0;
+  }
+  if (IsTextureValid(objs->tex_luma)) {
+    UnloadTexture(objs->tex_luma);
+    objs->tex_luma.id = 0;
+  }
+  if (IsTextureValid(objs->tex_u)) {
+    UnloadTexture(objs->tex_u);
+    objs->tex_u.id = 0;
+  }
+  if (IsTextureValid(objs->tex_v)) {
+    UnloadTexture(objs->tex_v);
+    objs->tex_v.id = 0;
+  }
   return RESULT_OK;
 }
 
