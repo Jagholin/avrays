@@ -1,0 +1,85 @@
+cmake_minimum_required(VERSION 3.10)
+
+project(avrays)
+
+# Поиск пакетов FFmpeg через pkg-config
+find_package(PkgConfig REQUIRED)
+
+pkg_check_modules(LIBAVCODEC REQUIRED libavcodec)
+pkg_check_modules(LIBAVUTIL REQUIRED libavutil)
+pkg_check_modules(LIBAVFORMAT REQUIRED libavformat)
+pkg_check_modules(LIBSWRESAMPLE REQUIRED libswresample)
+
+# Путь к raylib (из vendor)
+set(RAYLIB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vendor/raylib)
+set(RAYLIB_INCLUDE_DIR ${RAYLIB_DIR}/src)
+set(RAYLIB_LIBRARY ${RAYLIB_DIR}/src/libraylib.a)  # или libraylib.so
+
+# Проверяем существование raylib
+if(NOT EXISTS ${RAYLIB_INCLUDE_DIR}/raylib.h)
+    message(FATAL_ERROR "raylib.h not found in ${RAYLIB_INCLUDE_DIR}")
+endif()
+
+# Создаем SHARED библиотеку
+add_library(avrays SHARED avlib.c)
+
+# Добавляем заголовки
+target_include_directories(avrays PUBLIC 
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${LIBAVCODEC_INCLUDE_DIRS}
+    ${LIBAVUTIL_INCLUDE_DIRS}
+    ${LIBAVFORMAT_INCLUDE_DIRS}
+    ${LIBSWRESAMPLE_INCLUDE_DIRS}
+    ${RAYLIB_INCLUDE_DIR}  # Добавляем raylib
+)
+
+# Настройка для .so
+set_target_properties(avrays PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+)
+
+target_link_libraries(avrays PRIVATE 
+    ${LIBAVCODEC_LIBRARIES}
+    ${LIBAVUTIL_LIBRARIES}
+    ${LIBAVFORMAT_LIBRARIES}
+    ${LIBSWRESAMPLE_LIBRARIES}
+    ${RAYLIB_LIBRARY}  # Линкуем raylib
+    m
+    pthread
+)
+
+# Добавляем флаги компиляции
+target_compile_options(avrays PRIVATE ${LIBAVCODEC_CFLAGS_OTHER} ${LIBAVUTIL_CFLAGS_OTHER})
+
+# Создаем исполняемый файл
+add_executable(player main.c)
+
+target_include_directories(player PRIVATE 
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${LIBAVCODEC_INCLUDE_DIRS}
+    ${LIBAVUTIL_INCLUDE_DIRS}
+    ${LIBAVFORMAT_INCLUDE_DIRS}
+    ${LIBSWRESAMPLE_INCLUDE_DIRS}
+    ${RAYLIB_INCLUDE_DIR}
+)
+
+target_link_libraries(player PRIVATE 
+    avrays
+    ${LIBAVCODEC_LIBRARIES}
+    ${LIBAVUTIL_LIBRARIES}
+    ${LIBAVFORMAT_LIBRARIES}
+    ${LIBSWRESAMPLE_LIBRARIES}
+    ${RAYLIB_LIBRARY}
+    m
+    X11
+    pthread
+    dl
+)
+
+# Устанавливаем библиотеку
+install(TARGETS avrays
+    LIBRARY DESTINATION lib
+    PUBLIC_HEADER DESTINATION include
+)
