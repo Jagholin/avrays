@@ -35,6 +35,7 @@
 #include <libswresample/swresample.h>
 #include <pthread.h>
 #include <semaphore.h>
+#include <inttypes.h>
 #ifndef _MSC_VER
 // for usleep()
 #include <unistd.h>
@@ -876,10 +877,12 @@ static void try_unlock_decoder_sem(DecoderContext *ctx) {
   int sem_value;
   struct DecoderPrivate *p = ctx->p;
   semaphore_get_value(&p->sem, &sem_value);
-  if (sem_value == 0) {
+  // TraceLog(LOG_DEBUG, "current semaphore value is %d", sem_value);
+  if (sem_value <= 0) {
     // we can advance semaphore if both buffers are less than 80% empty
     if (ringbuffer_len(&p->image_buffer) < 0.8 * p->image_buffer.buf_size &&
         ringbuffer_len(&p->audio_buffer) < 0.8 * p->audio_buffer.buf_size) {
+        // TraceLog(LOG_INFO, "trying to advance the semaphore...");
       semaphore_incr(&p->sem);
     }
   }
@@ -1393,14 +1396,14 @@ Vector2 avray_draw_debug_overlay(DecoderContext *ctx, RaylibObjects *objs,
     text_width = tw;
   DrawText(msg, x, y, FONTSIZE, WHITE);
   y += LINEHEIGHT;
-  snprintf(msg, sizeof(msg), "abytes: %ld written: %ld", ctx->abytes_pulled,
+  snprintf(msg, sizeof(msg), "abytes: %" PRIu64 ", written: %" PRIu64, ctx->abytes_pulled,
            ctx->abytes_written);
   tw = MeasureText(msg, FONTSIZE);
   if (tw > text_width)
     text_width = tw;
   DrawText(msg, x, y, FONTSIZE, WHITE);
   y += LINEHEIGHT;
-  snprintf(msg, sizeof(msg), "vbytes: %ld, written: %ld", ctx->vbytes_pulled,
+  snprintf(msg, sizeof(msg), "vbytes: %" PRIu64 ", written: %" PRIu64, ctx->vbytes_pulled,
            ctx->vbytes_written);
   tw = MeasureText(msg, FONTSIZE);
   if (tw > text_width)
