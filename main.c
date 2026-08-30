@@ -34,7 +34,7 @@ DecoderContext dc;
 FILE *log_file;
 
 void open_log() { log_file = fopen("raylib.log", "w"); }
-void close_log() {
+void close_log(void) {
   if (log_file)
     fclose(log_file);
 }

@@ -97,8 +97,8 @@ typedef struct DecoderContext {
 
   TimeLine vbuffer_timeline;
   TimeLine abuffer_timeline;
-  unsigned long int abytes_pulled, vbytes_pulled;
-  unsigned long int abytes_written, vbytes_written;
+  uint64_t abytes_pulled, vbytes_pulled;
+  uint64_t abytes_written, vbytes_written;
 
   DecoderState state;
 } DecoderContext;
