@@ -3,3 +3,7 @@
 *.mp4
 player*
 build/
+vcpkg_installed/
+CMakeFiles/
+build_tests/
+CMakeUserPresets.json

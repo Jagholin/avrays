@@ -38,7 +38,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define UTILFUNC [[maybe_unused]] static inline
+#define UTILFUNC static inline
 
 typedef struct CleanupStack {
   struct CleanupStack *pnext;
@@ -244,20 +244,20 @@ UTILFUNC void ringbuffer_flush(RingBuffer *rb) {
 }
 
 typedef struct TimeLine {
-  void *buffer;
+  char *buffer;
   size_t elem_size;
   unsigned int cursor;
   size_t len;
 } TimeLine;
 
 UTILFUNC TimeLine make_timeline(size_t elem_size, size_t length) {
-  void *buf = malloc(elem_size * length);
+  char *buf = malloc(elem_size * length);
   memset(buf, 0, elem_size * length);
   return (TimeLine){buf, elem_size, 0, length};
 }
 
 UTILFUNC void *timeline_push(TimeLine *self) {
-  void *result = self->buffer + self->elem_size * self->cursor;
+  char *result = self->buffer + self->elem_size * self->cursor;
   self->cursor += 1;
   if (self->cursor >= self->len) {
     self->cursor = 0;
