@@ -40,7 +40,7 @@ void close_log(void) {
 }
 
 void tracelog_impl(FILE *log_stream, TraceLogLevel logLevel, double time,
-                   const char *text, va_list args) {
+                   const char *text) {
   const char *log_type = "";
   switch (logLevel) {
   case LOG_INFO:
@@ -66,13 +66,13 @@ void tracelog_impl(FILE *log_stream, TraceLogLevel logLevel, double time,
     return;
     break;
   }
-  fprintf(log_stream, "%s (%.3lf): ", log_type, time);
-  vfprintf(log_stream, text, args);
-  fputc('\n', log_stream);
+  fprintf(log_stream, "%s (%.3lf): %s\n", log_type, time, text);
 }
 
 void tracelog_cb(int logLevel, const char *text, va_list args) {
   FILE *log_stream = stdout;
+  // Even in multibyte strings, 2 kb buffer should be enough
+  char buffer[2048];
   double time = get_monotonic_time();
   time -= start_clock_time;
 
@@ -82,10 +82,11 @@ void tracelog_cb(int logLevel, const char *text, va_list args) {
   /* va_list aq;
   va_copy(aq, args);
   va_end(aq); */
-  tracelog_impl(log_stream, logLevel, time, text, args);
-  /* if (log_file) {
-    tracelog_impl(log_file, logLevel, time, text, aq);
-  } */
+  vsnprintf(buffer, sizeof(buffer), text, args);
+  tracelog_impl(log_stream, logLevel, time, buffer);
+  if (log_file) {
+    tracelog_impl(log_file, logLevel, time, buffer);
+  }
 }
 
 void audio_cb(void *frame_data, unsigned int frames) {

@@ -1,8 +1,9 @@
 *.mkv
 *.webm
 *.mp4
+.vs
 player*
-build/
+/build*/
 vcpkg_installed/
 CMakeFiles/
 build_tests/
