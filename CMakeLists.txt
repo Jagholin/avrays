@@ -1,6 +1,6 @@
 # 4.3 is what VS ships with now, we use it as a baseline
 # (but will probably work with lower versions, too)
-cmake_minimum_required(VERSION 4.3)
+cmake_minimum_required(VERSION 4.2)
 
 # The options logic has to be made before project(...) 
 # since that's when vcpkg install runs.
