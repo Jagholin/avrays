@@ -1,12 +1,25 @@
 {
   "dependencies": [
-    {
-      "name": "ffmpeg",
-      "features": [
-        "all"
+  ],
+  "features":
+  {
+    "ffmpeg": {
+      "description": "FFMPEG's libav library set",
+      "dependencies": [
+        {
+          "name": "ffmpeg",
+          "features": [
+            "all"
+          ]
+        }
       ]
     },
-    "pthreads"
-  ],
+    "pthreads": {
+      "description": "PThreads4W pthreads implementation. Only needed on MSVC",
+      "dependencies": [
+        "pthreads"
+      ]
+    }
+  },
   "builtin-baseline": "abb6dda5cc32914d2e64d7d72b974dc301d1fc8a"
 }
