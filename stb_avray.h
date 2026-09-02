@@ -44,7 +44,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define UTILFUNC [[maybe_unused]] static inline
+#define UTILFUNC static inline
 
 typedef struct CleanupStack {
   struct CleanupStack *pnext;
@@ -250,20 +250,20 @@ UTILFUNC void avray__ringbuffer_flush(avray__RingBuffer *rb) {
 }
 
 typedef struct TimeLine {
-  void *buffer;
+  char *buffer;
   size_t elem_size;
   unsigned int cursor;
   size_t len;
 } TimeLine;
 
 UTILFUNC TimeLine make_timeline(size_t elem_size, size_t length) {
-  void *buf = malloc(elem_size * length);
+  char *buf = malloc(elem_size * length);
   memset(buf, 0, elem_size * length);
   return (TimeLine){buf, elem_size, 0, length};
 }
 
 UTILFUNC void *timeline_push(TimeLine *self) {
-  void *result = self->buffer + self->elem_size * self->cursor;
+  char *result = self->buffer + self->elem_size * self->cursor;
   self->cursor += 1;
   if (self->cursor >= self->len) {
     self->cursor = 0;
@@ -428,8 +428,8 @@ typedef struct DecoderContext {
 
   TimeLine vbuffer_timeline;
   TimeLine abuffer_timeline;
-  unsigned long int abytes_pulled, vbytes_pulled;
-  unsigned long int abytes_written, vbytes_written;
+  uint64_t abytes_pulled, vbytes_pulled;
+  uint64_t abytes_written, vbytes_written;
 
   DecoderState state;
 } DecoderContext;
@@ -477,7 +477,11 @@ Vector2 avray_draw_debug_overlay(DecoderContext *ctx, RaylibObjects *objs,
 #include <libswresample/swresample.h>
 #include <pthread.h>
 #include <semaphore.h>
+#include <inttypes.h>
+#ifndef _MSC_VER
+// for usleep()
 #include <unistd.h>
+#endif
 
 
 // Size of the video buffer if the framerate is not available
@@ -512,7 +516,12 @@ static void avray__thread_create(ThreadType *t, void *(*thread_proc)(void *),
   pthread_create(t, NULL, thread_proc, arg);
 }
 static void thread_join(ThreadType *t) { pthread_join(*t, NULL); }
+
+#ifdef _MSC_VER
+static void thread_sleep_ms(unsigned int ms) { Sleep(ms); }
+#else
 static void thread_sleep_ms(unsigned int ms) { usleep(ms * 1000); }
+#endif
 
 int time_to_str(double seconds, char *buf, size_t n) {
   int sec = floor(seconds);
@@ -837,6 +846,7 @@ int avray_open_file(DecoderContext *ctx, const char *file_name) {
   }
   assert(ctx->state == DS_READY);
   struct DecoderPrivate *p = ctx->p;
+  TraceLog(LOG_INFO, "Trying to open file: %s", file_name);
   result = avformat_open_input(&p->fmt_ctx, file_name, NULL, NULL);
   if (result != 0) {
     return RESULT_CANT_OPEN;
@@ -844,7 +854,7 @@ int avray_open_file(DecoderContext *ctx, const char *file_name) {
   ERRCHECK("Can't open file");
 
   result = avformat_find_stream_info(p->fmt_ctx, NULL);
-  ERRCHECK("Cant find stream info");
+  ERRCHECK2R(result >= 0, RESULT_CANT_OPEN, "Cant find stream info");
 
   p->video_stream =
       av_find_best_stream(p->fmt_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
@@ -1307,10 +1317,12 @@ static void avray__try_unlock_decoder_sem(DecoderContext *ctx) {
   int sem_value;
   struct DecoderPrivate *p = ctx->p;
   avray__semaphore_get_value(&p->sem, &sem_value);
-  if (sem_value == 0) {
+  // TraceLog(LOG_DEBUG, "current semaphore value is %d", sem_value);
+  if (sem_value <= 0) {
     // we can advance semaphore if both buffers are less than 80% empty
     if (avray__ringbuffer_len(&p->image_buffer) < 0.8 * p->image_buffer.buf_size &&
         avray__ringbuffer_len(&p->audio_buffer) < 0.8 * p->audio_buffer.buf_size) {
+        // TraceLog(LOG_INFO, "trying to advance the semaphore...");
       avray__semaphore_incr(&p->sem);
     }
   }
@@ -1652,10 +1664,22 @@ int avray_init_graphics_objects(DecoderContext *ctx, RaylibObjects *objs) {
 }
 
 int avray_free_graphics_objects(RaylibObjects *objs) {
-  UnloadShader(objs->video_shader);
-  UnloadTexture(objs->tex_luma);
-  UnloadTexture(objs->tex_u);
-  UnloadTexture(objs->tex_v);
+  if (IsShaderValid(objs->video_shader)) {
+    UnloadShader(objs->video_shader);
+    objs->video_shader.id = 0;
+  }
+  if (IsTextureValid(objs->tex_luma)) {
+    UnloadTexture(objs->tex_luma);
+    objs->tex_luma.id = 0;
+  }
+  if (IsTextureValid(objs->tex_u)) {
+    UnloadTexture(objs->tex_u);
+    objs->tex_u.id = 0;
+  }
+  if (IsTextureValid(objs->tex_v)) {
+    UnloadTexture(objs->tex_v);
+    objs->tex_v.id = 0;
+  }
   return RESULT_OK;
 }
 
@@ -1812,14 +1836,14 @@ Vector2 avray_draw_debug_overlay(DecoderContext *ctx, RaylibObjects *objs,
     text_width = tw;
   DrawText(msg, x, y, FONTSIZE, WHITE);
   y += LINEHEIGHT;
-  snprintf(msg, sizeof(msg), "abytes: %ld written: %ld", ctx->abytes_pulled,
+  snprintf(msg, sizeof(msg), "abytes: %" PRIu64 ", written: %" PRIu64, ctx->abytes_pulled,
            ctx->abytes_written);
   tw = MeasureText(msg, FONTSIZE);
   if (tw > text_width)
     text_width = tw;
   DrawText(msg, x, y, FONTSIZE, WHITE);
   y += LINEHEIGHT;
-  snprintf(msg, sizeof(msg), "vbytes: %ld, written: %ld", ctx->vbytes_pulled,
+  snprintf(msg, sizeof(msg), "vbytes: %" PRIu64 ", written: %" PRIu64, ctx->vbytes_pulled,
            ctx->vbytes_written);
   tw = MeasureText(msg, FONTSIZE);
   if (tw > text_width)

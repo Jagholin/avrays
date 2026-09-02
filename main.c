@@ -1,13 +1,27 @@
-#include <GL/gl.h>
 #include <raylib.h>
 #include <raymath.h>
 #include <rlgl.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <threads.h>
 #include <time.h>
+#ifdef __MINGW32__
+#include <pthread.h>
+#include <pthread_unistd.h>
+#elif (defined _MSC_VER)
+// definded in winstuff.c
+double get_monotonic_time();
+#else
+#include <threads.h>
 #include <unistd.h>
+double get_monotonic_time() {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  double time = (double)ts.tv_nsec / 1000000000;
+  time += ts.tv_sec;
+  return time;
+}
+#endif
 
 #include "avlib.h"
 #define RAYGUI_IMPLEMENTATION
@@ -20,13 +34,13 @@ DecoderContext dc;
 FILE *log_file;
 
 void open_log() { log_file = fopen("raylib.log", "w"); }
-void close_log() {
+void close_log(void) {
   if (log_file)
     fclose(log_file);
 }
 
 void tracelog_impl(FILE *log_stream, TraceLogLevel logLevel, double time,
-                   const char *text, va_list args) {
+                   const char *text) {
   const char *log_type = "";
   switch (logLevel) {
   case LOG_INFO:
@@ -52,28 +66,26 @@ void tracelog_impl(FILE *log_stream, TraceLogLevel logLevel, double time,
     return;
     break;
   }
-  fprintf(log_stream, "%s (%.3lf): ", log_type, time);
-  vfprintf(log_stream, text, args);
-  fputc('\n', log_stream);
+  fprintf(log_stream, "%s (%.3lf): %s\n", log_type, time, text);
 }
 
 void tracelog_cb(int logLevel, const char *text, va_list args) {
   FILE *log_stream = stdout;
-  struct timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-  double time = (double)ts.tv_nsec / 1000000000;
-  time += ts.tv_sec;
+  // Even in multibyte strings, 2 kb buffer should be enough
+  char buffer[2048];
+  double time = get_monotonic_time();
   time -= start_clock_time;
 
   if (logLevel >= LOG_ERROR) {
     log_stream = stderr;
   }
-  va_list aq;
+  /* va_list aq;
   va_copy(aq, args);
-  va_end(aq);
-  tracelog_impl(log_stream, logLevel, time, text, args);
+  va_end(aq); */
+  vsnprintf(buffer, sizeof(buffer), text, args);
+  tracelog_impl(log_stream, logLevel, time, buffer);
   if (log_file) {
-    tracelog_impl(log_file, logLevel, time, text, aq);
+    tracelog_impl(log_file, logLevel, time, buffer);
   }
 }
 
@@ -147,10 +159,7 @@ void print_argv(char **argv, int argc) {
 
 int main(int argc, char **argv) {
   // tempfile = fopen("tempfile.out", "wb");
-  struct timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-  start_clock_time = (double)ts.tv_nsec / 1000000000;
-  start_clock_time += ts.tv_sec;
+  start_clock_time = get_monotonic_time();
   open_log();
   atexit(&close_log);
 
@@ -158,28 +167,35 @@ int main(int argc, char **argv) {
   SetTraceLogCallback(tracelog_cb);
   float current_volume = 0.2;
   if (argc < 2) {
+    fprintf(stderr, "No input files specified\n");
     return 1;
   }
   int result = avray_init_decoder(&dc);
-  if (result != 0)
+  if (result != 0) {
+    fprintf(stderr, "Can't initialize decoder\n");
     exit(EXIT_FAILURE);
+  }
 
   unsigned int file_index = 1;
   int current_argc = argc;
   char *file_name = argv[file_index];
   while ((result = avray_open_file(&dc, file_name)) == RESULT_CANT_OPEN) {
+    fprintf(stderr, "Can't open %s\n", file_name);
     remove_file_from_argv(argv, &current_argc, file_index);
     // print_argv(argv, current_argc);
     if (file_index == current_argc)
       break;
     file_name = argv[file_index];
   }
-  if (result != 0)
+  if (result != 0) {
+    fprintf(stderr, "File open failed\n");
     exit(EXIT_FAILURE);
+  }
 
   float scale_factor = 1.0;
   int scaled_width = 1, scaled_height = 1;
   Vector2 letterbox = {};
+  printf("Start init window\n");
   InitWindow(1024, 768, file_name);
   rescale_window(&scale_factor, &scaled_width, &scaled_height, &letterbox,
                  false);
@@ -220,6 +236,8 @@ int main(int argc, char **argv) {
       }
       StopAudioStream(stream);
       UnloadAudioStream(stream);
+      // Set this so that IsAudioStreamValid could detect "deleted" stream.
+      stream.buffer = NULL;
       avray_free_graphics_objects(&video_tex);
 
       file_name = argv[file_index];
@@ -353,7 +371,12 @@ int main(int argc, char **argv) {
 
   avray_free_graphics_objects(&video_tex);
   avray_shutdown(&dc);
-  UnloadAudioStream(stream);
+  // Assume that if the stream is already unloaded, its buffer would be set to
+  // NULL and the IsAudioStreamValid will return false
+  if (IsAudioStreamValid(stream)) {
+    UnloadAudioStream(stream);
+    stream.buffer = NULL; // being pedantic
+  }
   CloseAudioDevice();
   CloseWindow();
 
