@@ -11,7 +11,10 @@ on:
 jobs:
   build:
     runs-on: ${{ matrix.os }}
-
+    permissions:
+      id-token: write
+      contents: read
+      attestations: write
     strategy:
       # Set fail-fast to false to ensure that feedback is delivered for all matrix combinations. Consider changing this to true when your workflow is stable.
       fail-fast: false
@@ -125,7 +128,7 @@ jobs:
         -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
         -DCMAKE_C_COMPILER=${{ matrix.c_compiler }}
         -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
-        -DFFMPEG_DIR="./ffmpeg-9.0.1-full_build-shared"
+        ${{ case ( contains(matrix.os, 'windows'), '-DFFMPEG_DIR="./ffmpeg-9.0.1-full_build-shared"', '') }}
         -DUSE_FFMPEG_FROM_VCPKG=${{ matrix.ffmpeg_from_vcpkg }}
         -DUSE_FFMPEG_FROM_PKGCONFIG=${{ matrix.ffmpeg_from_pkgconfig }}
         -DUSE_PTHREADS4W=${{ matrix.use_pthreads }}
@@ -136,7 +139,29 @@ jobs:
 
     - name: Build
       # Build your program with the given configuration. Note that --config is needed because the default Windows generator is a multi-config generator (Visual Studio generator).
-      run: cmake --build ${{ steps.strings.outputs.build-output-dir }}
+      run: |
+        cmake --build ${{ steps.strings.outputs.build-output-dir }} --config Release
+
+    - name: Generate attestation
+      if: ${{ contains(matrix.os, 'windows') }}
+      uses: actions/attest@v4
+      with:
+        subject-path: ${{ steps.strings.outputs.build-output-dir }}\Release\player.exe
+
+    - name: move files into publish folder
+      if: ${{ contains(matrix.os, 'windows') }}
+      shell: bash
+      run: |
+        mkdir publish
+        mv "${{ steps.strings.outputs.build-output-dir }}"/Release/*.exe publish/
+        mv ffmpeg-9.0.1-full_build-shared/bin/{avcodec-63,avformat-63,avutil-61,swresample-7}.dll publish/
+
+    - name: Upload windows build
+      if: ${{ contains(matrix.os, 'windows') }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: avrays
+        path: publish/
 
 #    - name: Test
 #      working-directory: ${{ steps.strings.outputs.build-output-dir }}
