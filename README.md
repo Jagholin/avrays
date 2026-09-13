@@ -18,6 +18,14 @@ If you don't wish to use stb_avray.h, then you will need the following files: `a
 - make_stb is a bash script that generates stb_avray.h file.
 - stb_avray.h is a single header version of the library. You can include it instead of the avlib.c/avlib.h/utils.h combo.
 
+## Where do I get ffmpeg/libav from?
+
+On linux, look for packages named `ffmpeg`, `libav*-dev` or similar. Run `pkg-config --list-package-names | grep -E 'lib(av|sw)'` to see which of the libav* libraries you have installed. At the minimum, you need libavcodec, libavutil, libavformat and libswresample to compile avray.
+
+On windows, you can download and use precompiled binaries gyan [gyan](https://www.gyan.dev/ffmpeg/builds/) or [BtbN](https://github.com/BtbN/FFmpeg-Builds/releases). Make sure that what you downloaded actually contains dev files(headers and `*.lib`s) and not just executables for ffmpeg and friends.
+
+As an alternative, you can download and compile these libraries with vcpkg. If you go with this route, make sure you have enough space on your hard drive (10 Gb at the very least)
+
 ## How to pause, or note about how video/audio sync works
 
 AVRay assumes that the audio stream will be continously pulled in raylib's audio stream callback function, and calculates current timestamps/syncs video playback based on that. This has a couple of consequences:
@@ -50,6 +58,66 @@ The player has the following controls:
 - `Space` pauses/unpauses the playback
 - Double click switches borderless fullscreen mode on/off
 - `Esc` closes the window, as is tradition in raylib.
+
+### CMake presets and options
+
+cmake builds can be configured with the following options:
+
+```bash
+-DUSE_FFMPEG_FROM_VCPKG=ON # uses vcpkg to download and build libav libraries, default ON
+-DUSE_FFMPEG_FROM_PKGCONFIG=OFF # uses pkgconfig to find libav on your system
+-LIBRARY_ONLY=OFF # build only the library .a .lib
+```
+
+It's recommended to create `CMakeUserPresets.json` file to store build configurations.
+
+It could look like this 
+
+```json
+{
+  "version": 2,
+  "configurePresets": [
+    {
+      "name": "linux",
+      "inherits": "vcpkg",
+      "cacheVariables": {
+	      "VCPKG_TARGET_TRIPLET": "x64-linux",
+        "USE_FFMPEG_FROM_VCPKG": "OFF",
+        "USE_FFMPEG_FROM_PKGCONFIG": "ON"
+      }
+    },
+    {
+      "name": "windows",
+      "inherits": "vcpkg",
+      "binaryDir": "${sourceDir}/build_win",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-windows-static-md-release",
+        "USE_FFMPEG_FROM_VCPKG": "OFF",
+        "CMAKE_BUILD_TYPE": <Release or Debug>,
+        "FFMPEG_DIR": <ffmpeg folder with headers and precompiled libraries>,
+        "USE_PTHREADS4W": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows",
+      "configurePreset": "windows"
+    }, 
+    {
+      "name": "linux",
+      "configurePreset": "linux"
+    }
+  ]
+}
+```
+
+With `CMakeUserPresets.json` file the configure and compile steps can be as easy as:
+
+```bash
+cmake --preset=windows
+cmake --build --preset=windows
+```
 
 ## Minimal example
 
@@ -85,7 +153,7 @@ int main(int argc, char **argv) {
     DecoderState state = ctx.state;
     // Exit when the playback is finished
     if (state == DS_FINISHED) {
-      break;
+    break;
     }
     // Update textures checks the current timestamp(driven by the audio stream)
     // and updates the textures if it's time to show the next video frame.
@@ -208,3 +276,5 @@ static void thread_create(ThreadType *t, void *(*thread_proc)(void *),
 static void thread_join(ThreadType *t) { pthread_join(*t, NULL); }
 static void thread_sleep_ms(unsigned int ms) { usleep(ms * 1000); }
 ```
+
+See also open issues on the github's issue tracker.

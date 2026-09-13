@@ -28,6 +28,7 @@
  * distribution.
  *
  **********************************************************************************************/
+#include <inttypes.h>
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/imgutils.h>
@@ -35,7 +36,6 @@
 #include <libswresample/swresample.h>
 #include <pthread.h>
 #include <semaphore.h>
-#include <inttypes.h>
 #ifndef _MSC_VER
 // for usleep()
 #include <unistd.h>
@@ -882,7 +882,7 @@ static void try_unlock_decoder_sem(DecoderContext *ctx) {
     // we can advance semaphore if both buffers are less than 80% empty
     if (ringbuffer_len(&p->image_buffer) < 0.8 * p->image_buffer.buf_size &&
         ringbuffer_len(&p->audio_buffer) < 0.8 * p->audio_buffer.buf_size) {
-        // TraceLog(LOG_INFO, "trying to advance the semaphore...");
+      // TraceLog(LOG_INFO, "trying to advance the semaphore...");
       semaphore_incr(&p->sem);
     }
   }
@@ -1129,55 +1129,56 @@ void avray_shutdown(DecoderContext *ctx) {
 // Raylib specific things
 #include <raylib.h>
 
-const char *fs_yuv420p10 = "#version 130\n"
+static const char *fs_yuv420p10 = "#version 130\n"
 
-                           "in vec2 fragTexCoord;"
-                           "out vec4 finalColor;"
-                           "uniform sampler2D tex_luma;"
-                           "uniform sampler2D tex_u;"
-                           "uniform sampler2D tex_v;"
+                                  "in vec2 fragTexCoord;"
+                                  "out vec4 finalColor;"
+                                  "uniform sampler2D tex_luma;"
+                                  "uniform sampler2D tex_u;"
+                                  "uniform sampler2D tex_v;"
 
-                           "float samplet(sampler2D t) {"
-                           "   vec4 smp = texture(t, fragTexCoord);"
-                           "   float res = smp.r * 0.25 + smp.a * 64.0;"
-                           "   return res; }"
+                                  "float samplet(sampler2D t) {"
+                                  "   vec4 smp = texture(t, fragTexCoord);"
+                                  "   float res = smp.r * 0.25 + smp.a * 64.0;"
+                                  "   return res; }"
 
-                           "void main() {"
-                           "   float smp = samplet(tex_luma);"
-                           "   float luma_f = smp;"
-                           "   smp = samplet(tex_u);"
-                           "   float u_f = smp - 0.5;"
-                           "   smp = samplet(tex_v);"
-                           "   float v_f = smp - 0.5;"
+                                  "void main() {"
+                                  "   float smp = samplet(tex_luma);"
+                                  "   float luma_f = smp;"
+                                  "   smp = samplet(tex_u);"
+                                  "   float u_f = smp - 0.5;"
+                                  "   smp = samplet(tex_v);"
+                                  "   float v_f = smp - 0.5;"
 
-                           "   luma_f = 1.1643*(luma_f - 0.0625);"
-                           "   float r=luma_f+1.5958*v_f;"
-                           "   float g=luma_f-0.39173*u_f-0.81290*v_f;"
-                           "   float b=luma_f+2.017*u_f;"
-                           "   finalColor=vec4(r, g, b, 1.0);"
-                           "}";
+                                  "   luma_f = 1.1643*(luma_f - 0.0625);"
+                                  "   float r=luma_f+1.5958*v_f;"
+                                  "   float g=luma_f-0.39173*u_f-0.81290*v_f;"
+                                  "   float b=luma_f+2.017*u_f;"
+                                  "   finalColor=vec4(r, g, b, 1.0);"
+                                  "}";
 
 // shader code adopted from
 // https://stackoverflow.com/questions/30191911/is-it-possible-to-draw-yuv422-and-yuv420-texture-using-opengl
-const char *fs_yuv420p = "#version 130 \n"
-                         "in vec2 fragTexCoord;"
-                         "in vec4 fragColor;"
-                         "out vec4 finalColor;"
-                         "uniform sampler2D tex_luma;"
-                         "uniform sampler2D tex_u;"
-                         "uniform sampler2D tex_v;"
-                         "void main() {"
-                         "   float luma = texture(tex_luma, fragTexCoord).r;"
-                         "   float u = texture(tex_u, fragTexCoord).r;"
-                         "   float v = texture(tex_v, fragTexCoord).r;"
-                         "   luma=1.1643*(luma-0.0625);"
-                         "   u=u-0.5;"
-                         "   v=v-0.5;"
-                         "   float r=luma+1.5958*v;"
-                         "   float g=luma-0.39173*u-0.81290*v;"
-                         "   float b=luma+2.017*u;"
-                         "   finalColor=vec4(r, g, b, 1.0);"
-                         "}";
+static const char *fs_yuv420p =
+    "#version 130 \n"
+    "in vec2 fragTexCoord;"
+    "in vec4 fragColor;"
+    "out vec4 finalColor;"
+    "uniform sampler2D tex_luma;"
+    "uniform sampler2D tex_u;"
+    "uniform sampler2D tex_v;"
+    "void main() {"
+    "   float luma = texture(tex_luma, fragTexCoord).r;"
+    "   float u = texture(tex_u, fragTexCoord).r;"
+    "   float v = texture(tex_v, fragTexCoord).r;"
+    "   luma=1.1643*(luma-0.0625);"
+    "   u=u-0.5;"
+    "   v=v-0.5;"
+    "   float r=luma+1.5958*v;"
+    "   float g=luma-0.39173*u-0.81290*v;"
+    "   float b=luma+2.017*u;"
+    "   finalColor=vec4(r, g, b, 1.0);"
+    "}";
 
 int avray_init_graphics_objects(DecoderContext *ctx, RaylibObjects *objs) {
   *objs = (RaylibObjects){};
@@ -1396,15 +1397,15 @@ Vector2 avray_draw_debug_overlay(DecoderContext *ctx, RaylibObjects *objs,
     text_width = tw;
   DrawText(msg, x, y, FONTSIZE, WHITE);
   y += LINEHEIGHT;
-  snprintf(msg, sizeof(msg), "abytes: %" PRIu64 ", written: %" PRIu64, ctx->abytes_pulled,
-           ctx->abytes_written);
+  snprintf(msg, sizeof(msg), "abytes: %" PRIu64 ", written: %" PRIu64,
+           ctx->abytes_pulled, ctx->abytes_written);
   tw = MeasureText(msg, FONTSIZE);
   if (tw > text_width)
     text_width = tw;
   DrawText(msg, x, y, FONTSIZE, WHITE);
   y += LINEHEIGHT;
-  snprintf(msg, sizeof(msg), "vbytes: %" PRIu64 ", written: %" PRIu64, ctx->vbytes_pulled,
-           ctx->vbytes_written);
+  snprintf(msg, sizeof(msg), "vbytes: %" PRIu64 ", written: %" PRIu64,
+           ctx->vbytes_pulled, ctx->vbytes_written);
   tw = MeasureText(msg, FONTSIZE);
   if (tw > text_width)
     text_width = tw;
