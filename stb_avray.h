@@ -1285,7 +1285,12 @@ int avray_continue_decoding(DecoderContext *ctx) {
       } else {
         p->pkt_populated = true;
         result = avray__feed_codec(p, NULL);
-        ERRCHECK("Feed codec error");
+        // assume that the error was non-fatal and continue
+        if (result < 0) {
+          TraceLog(LOG_WARNING,
+                   "AVRAYS: avray__feed_codec returned an error, ignoring for now...");
+          p->pkt_populated = false;
+        }
       }
       // 2c. try pulling a frame again if we dont have it yet
       result = avray__pull_frame(p);
@@ -1433,6 +1438,8 @@ static int avray__seek_to_frame(DecoderContext *ctx, double ts) {
     TraceLog(LOG_DEBUG, "AVRAYS: Seek file (+-INF) returns %d", result);
   }
   if (result != 0) {
+    TraceLog(LOG_WARNING,
+             "Cannot seek in this file, remaining at current position...");
     avray__mutex_unlock(&p->image_buffer_mtx);
     avray__mutex_unlock(&p->audio_buffer_mtx);
     return result;
